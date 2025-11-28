@@ -35,3 +35,11 @@ Go (Gin + GORM) skeleton for the finance system. Business logic is intentionally
 - `DB_DRIVER` supports `postgres` or `mysql`.
 - Connection pool defaults are set in `internal/db/db.go`; tweak as needed.
 - Add your own modules (services/repositories/handlers) under `internal/`.
+
+## Hot reload (Air)
+- Install (requires network): `go install github.com/cosmtrek/air@latest` (set `GOPROXY` if需要国内镜像，如 `export GOPROXY=https://goproxy.cn,direct`).
+- Config file: `.air.toml` (already included).
+- Run with hot reload:
+  ```bash
+  air
+  ```
