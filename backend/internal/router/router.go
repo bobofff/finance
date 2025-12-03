@@ -4,12 +4,14 @@ import (
 	"strings"
 
 	"finance-backend/internal/config"
+	"finance-backend/internal/handler/account"
 	"finance-backend/internal/handler/health"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
-func New(cfg config.Config) *gin.Engine {
+func New(cfg config.Config, db *gorm.DB) *gin.Engine {
 	setGinMode(cfg.AppEnv)
 
 	r := gin.New()
@@ -18,6 +20,7 @@ func New(cfg config.Config) *gin.Engine {
 	api := r.Group("/api")
 	{
 		api.GET("/health", health.Ping)
+		account.RegisterRoutes(api.Group("/accounts"), db)
 	}
 
 	return r
