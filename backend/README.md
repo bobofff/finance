@@ -22,6 +22,7 @@ Go (Gin + GORM) skeleton for the finance system. Business logic is intentionally
    export DB_PASSWORD=finance
    export DB_NAME=finance
    ```
+   Or create a `.env` file (copy from `.env.example`); the server now loads it automatically.
 2) Run the server:
    ```bash
    go run ./cmd/server
