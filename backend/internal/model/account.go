@@ -21,5 +21,8 @@ func (Account) TableName() string {
 }
 
 func AutoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(&Account{})
+	return db.AutoMigrate(
+		&Account{},
+		&Category{},
+	)
 }

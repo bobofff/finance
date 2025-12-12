@@ -1,0 +1,237 @@
+:root {
+  font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.5;
+  color: #1f2f3d;
+  background-color: #f5f7fb;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #f5f7fb 0%, #e8eef9 100%);
+}
+
+.app-shell {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #f5f7fb 0%, #e8eef9 100%);
+}
+
+.sidebar {
+  background: radial-gradient(circle at 10% 20%, rgba(83, 110, 255, 0.25), transparent 35%),
+    radial-gradient(circle at 90% 10%, rgba(52, 211, 153, 0.25), transparent 28%),
+    #0f172a;
+  color: #e5e7eb;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  position: sticky;
+  top: 0;
+  min-height: 100vh;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px 16px 10px;
+}
+
+.brand-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #60a5fa, #22d3ee);
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.brand-title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.brand-subtitle {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.sidebar-menu {
+  border-right: none;
+  background: transparent;
+  --el-menu-bg-color: transparent;
+  --el-menu-active-color: #0b1220;
+  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.08);
+  --el-menu-text-color: #e5e7eb;
+}
+
+.sidebar-menu .el-menu-item {
+  height: 44px;
+  margin-bottom: 6px;
+  border-radius: 12px;
+  color: #e5e7eb;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  font-size: 14px;
+}
+
+.sidebar-menu .el-menu-item.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sidebar-menu .el-menu-item:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-menu .el-menu-item.is-active {
+  background: linear-gradient(135deg, #22d3ee, #60a5fa);
+  color: #0b1220;
+  box-shadow: 0 8px 20px rgba(34, 211, 238, 0.2);
+}
+
+.menu-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 10px;
+}
+
+.menu-badge {
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.12);
+  color: #e5e7eb;
+  border: none;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding: 14px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.footer-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.footer-text {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.content-shell {
+  background: transparent;
+}
+
+.topbar {
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+  background-color: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(8px);
+}
+
+.topbar-title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.topbar-subtitle {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.main-content {
+  padding: 24px 28px 32px;
+}
+
+.page-wrapper {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.section-header h1 {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+}
+
+.card {
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 8px 30px rgba(31, 47, 61, 0.08);
+  padding: 20px;
+}
+
+.toolbar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.table-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #3045a3;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.light-text {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+@media (max-width: 960px) {
+  .sidebar {
+    display: none;
+  }
+
+  .topbar {
+    padding: 0 16px;
+  }
+
+  .main-content {
+    padding: 16px;
+  }
+
+  .page-wrapper {
+    width: 100%;
+  }
+}

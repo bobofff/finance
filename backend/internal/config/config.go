@@ -32,7 +32,7 @@ func Load() Config {
 
 	return Config{
 		AppEnv:   getenv("APP_ENV", "development"),
-		HTTPPort: getenv("HTTP_PORT", "8080"),
+		HTTPPort: getenv("HTTP_PORT", "8888"),
 		DB: DBConfig{
 			Driver:   getenv("DB_DRIVER", "postgres"), // postgres | mysql
 			Host:     getenv("DB_HOST", "127.0.0.1"),

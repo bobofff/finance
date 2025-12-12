@@ -14,7 +14,7 @@ Go (Gin + GORM) skeleton for the finance system. Business logic is intentionally
 1) Set environment variables (see `.env.example`), e.g.:
    ```bash
    export APP_ENV=development
-   export HTTP_PORT=8080
+   export HTTP_PORT=8888
    export DB_DRIVER=postgres
    export DB_HOST=127.0.0.1
    export DB_PORT=5432
@@ -29,7 +29,7 @@ Go (Gin + GORM) skeleton for the finance system. Business logic is intentionally
    ```
 3) Test health:
    ```bash
-   curl http://localhost:8080/api/health
+   curl http://localhost:8888/api/health
    ```
 
 ## Notes

@@ -15,6 +15,18 @@ CREATE TABLE fin_accounts (
 COMMENT ON TABLE fin_accounts IS '财务账户，包含现金/负债/债务/投资等账户元数据';
 CREATE INDEX idx_fin_accounts_deleted_at ON fin_accounts(deleted_at);
 
+-- 账户期初 / 快照
+CREATE TABLE fin_account_snapshots (
+  id         SERIAL PRIMARY KEY,
+  account_id INT NOT NULL REFERENCES fin_accounts(id) ON DELETE CASCADE,
+  as_of      DATE NOT NULL,
+  amount     NUMERIC(18,2) NOT NULL,
+  note       TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE fin_account_snapshots IS '账户期初或任意时点快照，用于资产基准';
+CREATE UNIQUE INDEX idx_fin_account_snapshots_unique ON fin_account_snapshots(account_id, as_of);
+
 -- 分类
 CREATE TABLE fin_categories (
   id            SERIAL PRIMARY KEY,
@@ -24,18 +36,21 @@ CREATE TABLE fin_categories (
   deleted_at    TIMESTAMP NULL
 );
 COMMENT ON TABLE fin_categories IS '收支/转账/投资分类，可自引用形成层级';
+CREATE UNIQUE INDEX idx_fin_categories_parent_name ON fin_categories(parent_id, name);
+CREATE INDEX idx_fin_categories_parent_id ON fin_categories(parent_id);
 CREATE INDEX idx_fin_categories_deleted_at ON fin_categories(deleted_at);
 
 -- 交易主表
 CREATE TABLE fin_transactions (
   id            SERIAL PRIMARY KEY,
-  occurred_at   TIMESTAMP NOT NULL,
+  occurred_on   DATE NOT NULL, -- 记账日（按日精度）
   description   TEXT,
   note          TEXT,
   created_at    TIMESTAMP NOT NULL DEFAULT now(),
   deleted_at    TIMESTAMP NULL
 );
-COMMENT ON TABLE fin_transactions IS '交易主表，记录发生时间与摘要';
+COMMENT ON TABLE fin_transactions IS '交易主表，记录记账日与摘要';
+CREATE INDEX idx_fin_transactions_occurred_on ON fin_transactions(occurred_on);
 CREATE INDEX idx_fin_transactions_deleted_at ON fin_transactions(deleted_at);
 
 -- 分录
@@ -44,12 +59,15 @@ CREATE TABLE fin_transaction_lines (
   transaction_id INT NOT NULL REFERENCES fin_transactions(id) ON DELETE CASCADE,
   account_id     INT NOT NULL REFERENCES fin_accounts(id),
   category_id    INT REFERENCES fin_categories(id),
-  amount         NUMERIC(18,2) NOT NULL, -- 收入正，支出负；转账/投资用借贷平衡
+  amount         NUMERIC(18,2) NOT NULL CHECK (amount <> 0), -- 收入正，支出负；转账/投资用借贷平衡
   tags           TEXT[] DEFAULT '{}',
   note           TEXT,
   deleted_at     TIMESTAMP NULL
 );
 COMMENT ON TABLE fin_transaction_lines IS '交易分录，连接交易与账户/分类/标签/金额';
+CREATE INDEX idx_fin_transaction_lines_tx ON fin_transaction_lines(transaction_id);
+CREATE INDEX idx_fin_transaction_lines_account ON fin_transaction_lines(account_id);
+CREATE INDEX idx_fin_transaction_lines_category ON fin_transaction_lines(category_id);
 CREATE INDEX idx_fin_transaction_lines_deleted_at ON fin_transaction_lines(deleted_at);
 
 -- 证券主数据
@@ -73,6 +91,7 @@ CREATE TABLE fin_investment_lots (
   deleted_at           TIMESTAMP NULL
 );
 COMMENT ON TABLE fin_investment_lots IS '投资分录的数量与成交价，支持持仓与成本核算';
+CREATE INDEX idx_fin_investment_lots_security_id ON fin_investment_lots(security_id);
 CREATE INDEX idx_fin_investment_lots_deleted_at ON fin_investment_lots(deleted_at);
 
 -- 价格历史
