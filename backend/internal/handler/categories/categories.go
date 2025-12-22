@@ -1,12 +1,28 @@
 package categories
 
 import (
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 type Handler struct {
 	db *gorm.DB
+}
+
+type createCategoriesRequest struct {
+	LedgerID *int   `json:"ledger_id"`
+	Name     string `json:"name" binding:"required"`
+	Kind     string `json:"kind" binding:"required"`
+	ParentID *int   `json:"parent_id"`
+}
+
+type updateCategoriesRequest struct {
+	LedgerID *int    `json:"ledger_id"`
+	Name     *string `json:"name"`
+	Kind     *string `json:"kind"`
+	ParentID *int    `json:"parent_id"`
 }
 
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB) {
@@ -20,7 +36,11 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB) {
 }
 
 func (h Handler) create(c *gin.Context) {
-
+	var req createCategoriesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 }
 func (h Handler) list(c *gin.Context) {
 
@@ -31,7 +51,11 @@ func (h Handler) get(c *gin.Context) {
 }
 
 func (h Handler) update(c *gin.Context) {
-
+	var req updateCategoriesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 }
 
 func (h Handler) delete(c *gin.Context) {
