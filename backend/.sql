@@ -117,12 +117,47 @@ CREATE TABLE fin_investment_lots (
   security_id          INT NOT NULL REFERENCES fin_securities(id),
   quantity             NUMERIC(18,4) NOT NULL,
   price                NUMERIC(18,4) NOT NULL,
+  trade_price          NUMERIC(18,4) NOT NULL DEFAULT 0,
+  fee                  NUMERIC(18,4) NOT NULL DEFAULT 0,
+  tax                  NUMERIC(18,4) NOT NULL DEFAULT 0,
   deleted_at           TIMESTAMP NULL
 );
-COMMENT ON TABLE fin_investment_lots IS '投资分录的数量与成交价，支持持仓与成本核算';
+COMMENT ON TABLE fin_investment_lots IS '买入批次数量与成交价，支持持仓与成本核算';
 CREATE INDEX idx_fin_investment_lots_ledger_id ON fin_investment_lots(ledger_id);
 CREATE INDEX idx_fin_investment_lots_security_id ON fin_investment_lots(security_id);
 CREATE INDEX idx_fin_investment_lots_deleted_at ON fin_investment_lots(deleted_at);
+
+-- 投资卖出记录（数量与价格）
+CREATE TABLE fin_investment_sales (
+  id                   SERIAL PRIMARY KEY,
+  ledger_id            INT NOT NULL DEFAULT 1 REFERENCES fin_ledgers(id) ON DELETE RESTRICT,
+  transaction_line_id  INT NOT NULL REFERENCES fin_transaction_lines(id) ON DELETE CASCADE,
+  security_id          INT NOT NULL REFERENCES fin_securities(id),
+  quantity             NUMERIC(18,4) NOT NULL,
+  price                NUMERIC(18,4) NOT NULL,
+  deleted_at           TIMESTAMP NULL
+);
+COMMENT ON TABLE fin_investment_sales IS '卖出记录数量与成交价，用于已实现盈亏核算';
+CREATE INDEX idx_fin_investment_sales_ledger_id ON fin_investment_sales(ledger_id);
+CREATE INDEX idx_fin_investment_sales_line_id ON fin_investment_sales(transaction_line_id);
+CREATE INDEX idx_fin_investment_sales_security_id ON fin_investment_sales(security_id);
+CREATE INDEX idx_fin_investment_sales_deleted_at ON fin_investment_sales(deleted_at);
+
+-- 买入批次与卖出记录匹配（支持部分卖出）
+CREATE TABLE fin_investment_lot_allocations (
+  id          SERIAL PRIMARY KEY,
+  ledger_id   INT NOT NULL DEFAULT 1 REFERENCES fin_ledgers(id) ON DELETE RESTRICT,
+  buy_lot_id  INT NOT NULL REFERENCES fin_investment_lots(id) ON DELETE CASCADE,
+  sale_id     INT NOT NULL REFERENCES fin_investment_sales(id) ON DELETE CASCADE,
+  quantity    NUMERIC(18,4) NOT NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT now(),
+  deleted_at  TIMESTAMP NULL
+);
+COMMENT ON TABLE fin_investment_lot_allocations IS '买入批次与卖出记录的匹配分配，用于成本归集';
+CREATE INDEX idx_fin_investment_lot_allocations_ledger_id ON fin_investment_lot_allocations(ledger_id);
+CREATE INDEX idx_fin_investment_lot_allocations_buy_lot_id ON fin_investment_lot_allocations(buy_lot_id);
+CREATE INDEX idx_fin_investment_lot_allocations_sale_id ON fin_investment_lot_allocations(sale_id);
+CREATE INDEX idx_fin_investment_lot_allocations_deleted_at ON fin_investment_lot_allocations(deleted_at);
 
 -- 价格历史
 CREATE TABLE fin_security_prices (

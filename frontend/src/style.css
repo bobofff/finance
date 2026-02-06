@@ -171,6 +171,10 @@ body {
   margin: 0 auto;
 }
 
+.page-wrapper-full {
+  max-width: 100%;
+}
+
 .section-header {
   display: flex;
   align-items: center;

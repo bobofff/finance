@@ -20,9 +20,9 @@
 - `fin_categories`：收支/转账/投资分类（自引用层级）。字段：`id`、`name`、`kind`（`income|expense|transfer|investment`）、`parent_id`、`deleted_at`；同层级 `(parent_id, name)` 唯一。
 - `fin_transactions`：交易主表，`occurred_on`(date) 表示记账日，含摘要/备注、软删标记。
 - `fin_transaction_lines`：分录。字段：`id`、`transaction_id`、`account_id`、`category_id`、`amount`(收入正、支出负；转账/投资以借贷平衡)、`tags`、`note`、`deleted_at`；索引覆盖 `transaction_id`、`account_id`、`category_id`。
-- 投资：`fin_securities`（标的）、`fin_investment_lots`（数量/价格）、`fin_security_prices`（历史价格）。
+- 投资：`fin_securities`（标的）、`fin_investment_lots`（买入批次）、`fin_investment_sales`（卖出记录）、`fin_investment_lot_allocations`（批次匹配）、`fin_security_prices`（历史价格）。
 
-> 关键口径：收支按日存储；同一 transaction 下分录金额需在业务层保证平衡（借贷和为 0）；转账用两条分录表示转出/转入；投资入金/出金可用转账口径（现金账户与投资账户间）+ 买卖分录。
+> 关键口径：收支按日存储；同一 transaction 下分录金额需在业务层保证平衡（借贷和为 0）；转账用两条分录表示转出/转入；投资入金/出金可用转账口径（现金账户与投资账户间）+ 买卖分录。已实现收益不落账，按卖出记录与批次匹配结果计算。
 
 ## API 现状
 - `GET /api/health`：健康检查。

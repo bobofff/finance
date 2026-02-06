@@ -24,5 +24,12 @@ func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&Account{},
 		&Category{},
+		&Transaction{},
+		&TransactionLine{},
+		&Security{},
+		&InvestmentLot{},
+		&InvestmentSale{},
+		&InvestmentLotAllocation{},
+		&SecurityPrice{},
 	)
 }

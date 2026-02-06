@@ -37,7 +37,7 @@ Go (Gin + GORM) skeleton for the finance system. Business logic is intentionally
 - 口径：资产与负债分开展示；投资按公允价值计入；暂不支持多币种汇总。
 - 投资定价：手动维护标的价格，按 `as_of` 取最近价格估值。
 - 多账本预留：引入 `fin_ledgers`，核心表带 `ledger_id`（默认 1），便于后续扩展多用户/多账本。
-- 核心表：账户、账户快照、分类、交易、分录、证券、投资批次、价格历史（详见 `.sql`）。
+- 核心表：账户、账户快照、分类、交易、分录、证券、投资批次、卖出记录、批次匹配、价格历史（详见 `.sql`）。
 - 时点资产计算：最近快照 + 当日及以前分录累计；投资账户在此基础上叠加持仓市值。
 
 ## 操作明细（简单模式：单分录）
@@ -74,4 +74,3 @@ Go (Gin + GORM) skeleton for the finance system. Business logic is intentionally
   ```bash
   air
   ```
-

@@ -23,6 +23,7 @@ func (k CategoryKind) IsValid() bool {
 
 type Category struct {
 	ID        int            `gorm:"primaryKey;column:id"`
+	LedgerID  int            `gorm:"column:ledger_id;not null"`
 	Name      string         `gorm:"column:name;not null"`
 	Kind      CategoryKind   `gorm:"column:kind;not null;check:kind IN ('income','expense','transfer','investment')"`
 	ParentID  *int           `gorm:"column:parent_id"`

@@ -33,8 +33,8 @@
         </div>
       </el-header>
       <el-main class="main-content">
-        <div class="page-wrapper">
-          <AccountPage />
+        <div class="page-wrapper" :class="{ 'page-wrapper-full': activeMenu === 'investments' }">
+          <component :is="activeView" />
         </div>
       </el-main>
     </el-container>
@@ -42,7 +42,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, type Component } from 'vue';
+import { computed, ref, type Component } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
   Bell,
@@ -50,10 +50,13 @@ import {
   DataAnalysis,
   Setting,
   Tickets,
+  TrendCharts,
   User,
   WalletFilled
 } from '@element-plus/icons-vue';
 import AccountPage from './views/AccountPage.vue';
+import CategoryPage from './views/CategoryPage.vue';
+import InvestmentPage from './views/InvestmentPage.vue';
 
 type MenuItem = {
   key: string;
@@ -66,12 +69,23 @@ type MenuItem = {
 const menuItems: MenuItem[] = [
   { key: 'dashboard', label: '概览', icon: DataAnalysis, disabled: true, badge: 'Soon' },
   { key: 'accounts', label: '账户', icon: WalletFilled },
-  { key: 'categories', label: '分类', icon: Collection, disabled: true, badge: '待开发' },
+  { key: 'categories', label: '分类', icon: Collection },
+  { key: 'investments', label: '投资', icon: TrendCharts },
   { key: 'transactions', label: '交易', icon: Tickets, disabled: true, badge: '待开发' },
   { key: 'settings', label: '设置', icon: Setting, disabled: true }
 ];
 
 const activeMenu = ref('accounts');
+const activeView = computed(() => {
+  switch (activeMenu.value) {
+    case 'categories':
+      return CategoryPage;
+    case 'investments':
+      return InvestmentPage;
+    default:
+      return AccountPage;
+  }
+});
 
 const onSelect = (key: string) => {
   const previous = activeMenu.value;
