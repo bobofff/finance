@@ -68,7 +68,7 @@ func loadDotEnv() {
 }
 
 func candidateEnvPaths() []string {
-	paths := []string{".env"}
+	paths := []string{".env", "deploy/.env"}
 
 	_, filename, _, ok := runtime.Caller(0)
 	if ok {
@@ -76,6 +76,7 @@ func candidateEnvPaths() []string {
 		moduleRoot := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", ".."))
 		if moduleRoot != "." {
 			paths = append(paths, filepath.Join(moduleRoot, ".env"))
+			paths = append(paths, filepath.Join(moduleRoot, "deploy", ".env"))
 		}
 	}
 

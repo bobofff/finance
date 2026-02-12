@@ -1,6 +1,6 @@
 <template>
   <el-container class="app-shell">
-    <el-aside width="240px" class="sidebar">
+    <el-aside v-if="isAuthed" width="240px" class="sidebar">
       <div class="brand">
         <div class="brand-logo">¥</div>
         <div>
@@ -22,14 +22,14 @@
     </el-aside>
 
     <el-container class="content-shell">
-      <el-header class="topbar">
+      <el-header v-if="isAuthed" class="topbar">
         <div class="topbar-left">
           <div class="topbar-title">财务总览</div>
           <div class="topbar-subtitle">Accounts · Transactions · Insights</div>
         </div>
         <div class="topbar-actions">
           <el-button text size="small" :icon="Bell">通知</el-button>
-          <el-button text size="small" :icon="User">用户</el-button>
+          <el-button text size="small" :icon="User" @click="handleLogout">退出</el-button>
         </div>
       </el-header>
       <el-main class="main-content">
@@ -37,10 +37,13 @@
           class="page-wrapper"
           :class="{
             'page-wrapper-full':
-              activeMenu === 'investments' || activeMenu === 'transactions' || activeMenu === 'snapshots'
+              !isAuthed ||
+              activeMenu === 'investments' ||
+              activeMenu === 'transactions' ||
+              activeMenu === 'snapshots'
           }"
         >
-          <component :is="activeView" :key="activeMenu" />
+          <component :is="activeView" :key="activeMenu" @success="handleLoginSuccess" />
         </div>
       </el-main>
     </el-container>
@@ -48,7 +51,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, type Component } from 'vue';
+import { computed, onMounted, ref, type Component } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
   Bell,
@@ -66,6 +69,9 @@ import AccountSnapshotPage from './views/AccountSnapshotPage.vue';
 import InvestmentPage from './views/InvestmentPage.vue';
 import BalanceSheetPage from './views/BalanceSheetPage.vue';
 import TransactionPage from './views/TransactionPage.vue';
+import LoginPage from './views/LoginPage.vue';
+import { authStorage } from '@/api/client';
+import { logout } from '@/api/auth';
 
 type MenuItem = {
   key: string;
@@ -87,7 +93,11 @@ const menuItems: MenuItem[] = [
 
 const MENU_STORAGE_KEY = 'finance.activeMenu';
 const activeMenu = ref(localStorage.getItem(MENU_STORAGE_KEY) || 'balance-sheet');
+const isAuthed = ref(!!authStorage.getToken());
 const activeView = computed(() => {
+  if (!isAuthed.value) {
+    return LoginPage;
+  }
   switch (activeMenu.value) {
     case 'balance-sheet':
       return BalanceSheetPage;
@@ -116,4 +126,17 @@ const onSelect = (key: string) => {
   activeMenu.value = item.key;
   localStorage.setItem(MENU_STORAGE_KEY, item.key);
 };
+
+const handleLoginSuccess = () => {
+  isAuthed.value = true;
+};
+
+const handleLogout = () => {
+  logout();
+  isAuthed.value = false;
+};
+
+onMounted(() => {
+  window.addEventListener('auth:logout', handleLogout);
+});
 </script>

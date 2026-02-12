@@ -16,6 +16,9 @@ services:
       DB_NAME: "${DB_NAME}"
       DB_SSLMODE: "${DB_SSLMODE}"
       DB_TIMEZONE: "${DB_TIMEZONE}"
+      AUTH_USERNAME: "${AUTH_USERNAME}"
+      AUTH_PASSWORD_HASH: "${AUTH_PASSWORD_HASH}"
+      AUTH_JWT_SECRET: "${AUTH_JWT_SECRET}"
     expose:
       - "8888"
     restart: unless-stopped
