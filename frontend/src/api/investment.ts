@@ -36,3 +36,7 @@ export async function updateInvestmentBuy(lotId: number, payload: CreateBuyPaylo
   const { data } = await client.patch<CreateBuyResponse>(`/investments/buys/${lotId}`, payload);
   return data;
 }
+
+export async function deleteInvestmentBuy(lotId: number): Promise<void> {
+  await client.delete(`/investments/buys/${lotId}`);
+}

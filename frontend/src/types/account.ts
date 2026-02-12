@@ -32,7 +32,7 @@ export interface AccountFormInput {
 export const ACCOUNT_TYPES: Array<{ value: string; label: string }> = [
   { value: 'cash', label: 'Cash' },
   { value: 'liability', label: 'Liability' },
-  { value: 'debt', label: 'Debt' },
+  { value: 'debt', label: 'Receivable' },
   { value: 'investment', label: 'Investment' },
   { value: 'other_asset', label: 'Other Asset' }
 ];

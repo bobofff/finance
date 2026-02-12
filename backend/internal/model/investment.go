@@ -8,8 +8,8 @@ import (
 
 type Security struct {
 	ID        uint           `gorm:"primaryKey"`
-	LedgerID  int            `gorm:"column:ledger_id;not null;default:1"`
-	Ticker    string         `gorm:"column:ticker;not null;unique"`
+	LedgerID  int            `gorm:"column:ledger_id;not null;default:1;uniqueIndex:idx_security_ledger_ticker"`
+	Ticker    string         `gorm:"column:ticker;not null;unique;uniqueIndex:idx_security_ledger_ticker"`
 	Name      string         `gorm:"column:name;not null"`
 	Currency  string         `gorm:"column:currency;not null;default:CNY"`
 	DeletedAt gorm.DeletedAt `gorm:"column:deleted_at;index"`

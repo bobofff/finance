@@ -8,6 +8,7 @@ import (
 
 type Account struct {
 	ID        uint           `gorm:"primaryKey"`
+	LedgerID  int            `gorm:"column:ledger_id;not null;default:1;index"`
 	Name      string         `gorm:"column:name;not null"`
 	Type      string         `gorm:"column:type;not null"`
 	Currency  string         `gorm:"column:currency;not null;default:CNY"`
@@ -23,6 +24,7 @@ func (Account) TableName() string {
 func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&Account{},
+		&AccountSnapshot{},
 		&Category{},
 		&Transaction{},
 		&TransactionLine{},

@@ -8,7 +8,7 @@
           <div class="brand-subtitle">简洁的财务面板</div>
         </div>
       </div>
-      <el-menu :default-active="activeMenu" class="sidebar-menu" :router="false" @select="onSelect">
+      <el-menu :default-active="activeMenu" class="sidebar-menu" :router="false" :collapse-transition="false" @select="onSelect">
         <el-menu-item v-for="item in menuItems" :key="item.key" :index="item.key" :disabled="item.disabled">
           <component :is="item.icon" class="menu-icon" />
           <span>{{ item.label }}</span>
@@ -33,8 +33,14 @@
         </div>
       </el-header>
       <el-main class="main-content">
-        <div class="page-wrapper" :class="{ 'page-wrapper-full': activeMenu === 'investments' }">
-          <component :is="activeView" />
+        <div
+          class="page-wrapper"
+          :class="{
+            'page-wrapper-full':
+              activeMenu === 'investments' || activeMenu === 'transactions' || activeMenu === 'snapshots'
+          }"
+        >
+          <component :is="activeView" :key="activeMenu" />
         </div>
       </el-main>
     </el-container>
@@ -56,7 +62,10 @@ import {
 } from '@element-plus/icons-vue';
 import AccountPage from './views/AccountPage.vue';
 import CategoryPage from './views/CategoryPage.vue';
+import AccountSnapshotPage from './views/AccountSnapshotPage.vue';
 import InvestmentPage from './views/InvestmentPage.vue';
+import BalanceSheetPage from './views/BalanceSheetPage.vue';
+import TransactionPage from './views/TransactionPage.vue';
 
 type MenuItem = {
   key: string;
@@ -67,21 +76,29 @@ type MenuItem = {
 };
 
 const menuItems: MenuItem[] = [
-  { key: 'dashboard', label: '概览', icon: DataAnalysis, disabled: true, badge: 'Soon' },
+  { key: 'balance-sheet', label: '资产负债', icon: DataAnalysis },
   { key: 'accounts', label: '账户', icon: WalletFilled },
+  { key: 'snapshots', label: '期初余额', icon: Tickets },
   { key: 'categories', label: '分类', icon: Collection },
   { key: 'investments', label: '投资', icon: TrendCharts },
-  { key: 'transactions', label: '交易', icon: Tickets, disabled: true, badge: '待开发' },
+  { key: 'transactions', label: '交易', icon: Tickets },
   { key: 'settings', label: '设置', icon: Setting, disabled: true }
 ];
 
-const activeMenu = ref('accounts');
+const MENU_STORAGE_KEY = 'finance.activeMenu';
+const activeMenu = ref(localStorage.getItem(MENU_STORAGE_KEY) || 'balance-sheet');
 const activeView = computed(() => {
   switch (activeMenu.value) {
+    case 'balance-sheet':
+      return BalanceSheetPage;
     case 'categories':
       return CategoryPage;
+    case 'snapshots':
+      return AccountSnapshotPage;
     case 'investments':
       return InvestmentPage;
+    case 'transactions':
+      return TransactionPage;
     default:
       return AccountPage;
   }
@@ -97,5 +114,6 @@ const onSelect = (key: string) => {
     return;
   }
   activeMenu.value = item.key;
+  localStorage.setItem(MENU_STORAGE_KEY, item.key);
 };
 </script>

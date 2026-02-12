@@ -66,7 +66,11 @@ func (h Handler) create(c *gin.Context) {
 }
 func (h Handler) list(c *gin.Context) {
 	var categories []model.Category
-	if err := h.db.Find(&categories).Error; err != nil {
+	if err := h.db.
+		Model(&model.Category{}).
+		Select("id, ledger_id, name, kind, parent_id, deleted_at").
+		Order("id").
+		Find(&categories).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query categories"})
 		return
 	}
@@ -191,7 +195,46 @@ func (h Handler) update(c *gin.Context) {
 }
 
 func (h Handler) delete(c *gin.Context) {
+	id, ok := parseID(c.Param("id"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
 
+	var category model.Category
+	err := h.db.First(&category, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "category not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load category"})
+		return
+	}
+
+	var childCount int64
+	if err := h.db.Model(&model.Category{}).
+		Where("parent_id = ? AND deleted_at IS NULL", id).
+		Count(&childCount).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check child categories"})
+		return
+	}
+	if childCount > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "category has child categories"})
+		return
+	}
+
+	tx := h.db.Delete(&model.Category{}, id)
+	if tx.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete category"})
+		return
+	}
+	if tx.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "category not found"})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
 }
 
 func parseID(raw string) (uint, bool) {

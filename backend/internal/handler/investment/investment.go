@@ -25,6 +25,7 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB) {
 	rg.GET("/lots", h.listLots)
 	rg.POST("/buys", h.createBuy)
 	rg.PATCH("/buys/:id", h.updateBuy)
+	rg.DELETE("/buys/:id", h.deleteBuy)
 	rg.POST("/sales", h.createSale)
 }
 
@@ -617,6 +618,80 @@ func (h Handler) updateBuy(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+func (h Handler) deleteBuy(c *gin.Context) {
+	lotID, ok := parseUintID(c.Param("id"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid lot id"})
+		return
+	}
+
+	ledgerID := 1
+	if value := strings.TrimSpace(c.Query("ledger_id")); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid ledger_id"})
+			return
+		}
+		ledgerID = parsed
+	}
+
+	err := h.db.Transaction(func(tx *gorm.DB) error {
+		var lot model.InvestmentLot
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND ledger_id = ?", lotID, ledgerID).
+			First(&lot).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return newRequestError("buy lot not found")
+			}
+			return err
+		}
+
+		var allocated float64
+		if err := tx.Table("fin_investment_lot_allocations").
+			Select("COALESCE(SUM(quantity), 0)").
+			Where("buy_lot_id = ? AND deleted_at IS NULL", lotID).
+			Scan(&allocated).Error; err != nil {
+			return err
+		}
+		if allocated > 0 {
+			return newRequestError("buy lot already allocated, cannot delete")
+		}
+
+		var line model.TransactionLine
+		if err := tx.Where("id = ? AND ledger_id = ?", lot.TransactionLineID, ledgerID).First(&line).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return newRequestError("transaction line not found")
+			}
+			return err
+		}
+
+		if err := tx.Delete(&model.InvestmentLot{}, lotID).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("transaction_id = ? AND ledger_id = ?", line.TransactionID, ledgerID).
+			Delete(&model.TransactionLine{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&model.Transaction{}, line.TransactionID).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		var reqErr requestError
+		if errors.As(err, &reqErr) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": reqErr.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete buy"})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
 func (h Handler) createSale(c *gin.Context) {
 	var req createSaleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -917,7 +992,7 @@ func resolveSecurity(tx *gorm.DB, ledgerID int, securityID *uint, tickerRaw stri
 	}
 
 	var security model.Security
-	err := tx.Where("ticker = ?", ticker).First(&security).Error
+	err := tx.Where("ticker = ? AND ledger_id = ?", ticker, ledgerID).First(&security).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		security = model.Security{
 			LedgerID: ledgerID,

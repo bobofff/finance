@@ -39,6 +39,7 @@ var allowedTypes = map[string]struct{}{
 
 // createAccountRequest 新建账户时的请求体。
 type createAccountRequest struct {
+	LedgerID *int   `json:"ledger_id"`              // 账本 ID，可选
 	Name     string `json:"name" binding:"required"` // 账户名称（必填）
 	Type     string `json:"type" binding:"required"` // 账户类型（必填）
 	Currency string `json:"currency"`                // 币种，缺省为 CNY
@@ -78,12 +79,22 @@ func (h Handler) create(c *gin.Context) {
 		isActive = *req.IsActive
 	}
 
+	ledgerID := 1
+	if req.LedgerID != nil {
+		if *req.LedgerID <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "ledger_id must be positive"})
+			return
+		}
+		ledgerID = *req.LedgerID
+	}
+
 	currency := strings.TrimSpace(req.Currency)
 	if currency == "" {
 		currency = "CNY"
 	}
 
 	account := model.Account{
+		LedgerID: ledgerID,
 		Name:     name,
 		Type:     accountType,
 		Currency: currency,

@@ -19,15 +19,16 @@
   </div>
 
   <div class="card">
-    <el-table
-      :data="filteredLots"
-      stripe
-      border
-      v-loading="loading"
-      style="width: 100%"
-      row-key="lotId"
-      @selection-change="onSelectionChange"
-    >
+    <div class="table-scroll">
+      <el-table
+        :data="filteredLots"
+        stripe
+        border
+        v-loading="loading"
+        style="width: 100%; min-width: 1400px"
+        row-key="lotId"
+        @selection-change="onSelectionChange"
+      >
       <el-table-column type="selection" width="52" :selectable="isSelectable" />
       <el-table-column label="状态" width="120">
         <template #default="{ row }">
@@ -36,7 +37,7 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="标的" min-width="200">
+      <el-table-column label="标的" min-width="240">
         <template #default="{ row }">
           <div class="security-cell">
             <div class="security-ticker">{{ row.securityTicker }}</div>
@@ -44,41 +45,52 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column prop="occurredOn" label="买入日期" width="130" />
-      <el-table-column label="成交价" width="120" align="right">
+      <el-table-column prop="occurredOn" label="买入日期" width="140" />
+      <el-table-column label="成交价" width="130" align="right">
         <template #default="{ row }">
           {{ formatNumber(row.tradePrice > 0 ? row.tradePrice : row.price, 4) }}
         </template>
       </el-table-column>
-      <el-table-column label="成本价" width="120" align="right">
+      <el-table-column label="成本价" width="130" align="right">
         <template #default="{ row }">{{ formatNumber(row.price, 4) }}</template>
       </el-table-column>
-      <el-table-column label="手续费" width="110" align="right">
+      <el-table-column label="手续费" width="120" align="right">
         <template #default="{ row }">{{ formatNumber(row.fee, 4) }}</template>
       </el-table-column>
-      <el-table-column label="税费" width="110" align="right">
+      <el-table-column label="税费" width="120" align="right">
         <template #default="{ row }">{{ formatNumber(row.tax, 4) }}</template>
       </el-table-column>
-      <el-table-column label="总数量" width="120" align="right">
+      <el-table-column label="总数量" width="130" align="right">
         <template #default="{ row }">{{ formatNumber(row.quantity, 4) }}</template>
       </el-table-column>
-      <el-table-column label="已匹配" width="120" align="right">
+      <el-table-column label="已匹配" width="130" align="right">
         <template #default="{ row }">{{ formatNumber(row.allocatedQuantity, 4) }}</template>
       </el-table-column>
-      <el-table-column label="可卖数量" width="120" align="right">
+      <el-table-column label="可卖数量" width="130" align="right">
         <template #default="{ row }">{{ formatNumber(Math.max(row.remainingQuantity, 0), 4) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="180" align="right">
+      <el-table-column label="操作" width="240" align="right">
         <template #default="{ row }">
           <div class="table-actions">
             <el-button size="small" @click="openBuyDialogFromRow(row)">快速添加</el-button>
             <el-button size="small" type="primary" plain :disabled="row.allocatedQuantity > 0" @click="openEditBuyDialog(row)">
               修改
             </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              :disabled="row.allocatedQuantity > 0"
+              :loading="deletingLotId === row.lotId"
+              @click="confirmDeleteLot(row)"
+            >
+              删除
+            </el-button>
           </div>
         </template>
       </el-table-column>
-    </el-table>
+      </el-table>
+    </div>
   </div>
 
   <el-dialog v-model="dialogVisible" title="批次卖出" width="960px" destroy-on-close>
@@ -359,9 +371,15 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { RefreshRight } from '@element-plus/icons-vue';
-import { fetchInvestmentLots, createInvestmentBuy, createInvestmentSale, updateInvestmentBuy } from '@/api/investment';
+import {
+  fetchInvestmentLots,
+  createInvestmentBuy,
+  createInvestmentSale,
+  updateInvestmentBuy,
+  deleteInvestmentBuy
+} from '@/api/investment';
 import { createTransfer } from '@/api/transfer';
 import { fetchAccounts } from '@/api/account';
 import { fetchCategories } from '@/api/category';
@@ -384,6 +402,7 @@ const buyMode = ref<'create' | 'edit'>('create');
 const editingLotId = ref<number | null>(null);
 const transferDialogVisible = ref(false);
 const transferSaving = ref(false);
+const deletingLotId = ref<number | null>(null);
 
 const saleForm = reactive({
   occurredOn: formatDate(new Date()),
@@ -577,6 +596,27 @@ const openEditBuyDialog = (row: InvestmentLot) => {
   buyForm.taxCategoryId = null;
   buyForm.description = '';
   buyDialogVisible.value = true;
+};
+
+const confirmDeleteLot = (row: InvestmentLot) => {
+  if (row.allocatedQuantity > 0) {
+    ElMessage.warning('该批次已匹配卖单，无法删除');
+    return;
+  }
+  ElMessageBox.confirm(`确认删除买入批次「${row.securityTicker} ${row.occurredOn}」？`, '提示', { type: 'warning' })
+    .then(async () => {
+      deletingLotId.value = row.lotId;
+      try {
+        await deleteInvestmentBuy(row.lotId);
+        lots.value = lots.value.filter((item) => item.lotId !== row.lotId);
+        ElMessage.success('已删除');
+      } catch (error) {
+        ElMessage.error((error as Error).message);
+      } finally {
+        deletingLotId.value = null;
+      }
+    })
+    .catch(() => undefined);
 };
 
 const openSellDialog = () => {
@@ -860,5 +900,12 @@ function formatDate(date: Date): string {
   .dialog-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+</style>
+
+<style scoped>
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
 }
 </style>
