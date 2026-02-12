@@ -7,7 +7,8 @@ cd "$ROOT_DIR"
 echo "==> Pull latest code"
 git pull
 
-echo "==> Sync deploy/.env from backend/.env.example"
+echo "==> Reset deploy/.env from backend/.env.example"
+rm -f deploy/.env
 cp backend/.env.example deploy/.env
 
 echo "==> Build and restart containers"
