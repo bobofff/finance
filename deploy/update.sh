@@ -7,6 +7,9 @@ cd "$ROOT_DIR"
 echo "==> Pull latest code"
 git pull
 
+echo "==> Sync deploy/.env from backend/.env.example"
+cp backend/.env.example deploy/.env
+
 echo "==> Build and restart containers"
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 
