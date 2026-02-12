@@ -1,6 +1,6 @@
 <template>
   <el-container class="app-shell">
-    <el-aside v-if="isAuthed" width="240px" class="sidebar">
+    <el-aside v-if="isAuthed && !isMobile" width="240px" class="sidebar">
       <div class="brand">
         <div class="brand-logo">¥</div>
         <div>
@@ -24,6 +24,7 @@
     <el-container class="content-shell">
       <el-header v-if="isAuthed" class="topbar">
         <div class="topbar-left">
+          <el-button v-if="isMobile" text size="small" @click="drawerVisible = true">菜单</el-button>
           <div class="topbar-title">财务总览</div>
           <div class="topbar-subtitle">Accounts · Transactions · Insights</div>
         </div>
@@ -48,10 +49,20 @@
       </el-main>
     </el-container>
   </el-container>
+
+  <el-drawer v-model="drawerVisible" title="菜单" size="240px" direction="ltr" :with-header="true">
+    <el-menu :default-active="activeMenu" class="sidebar-menu" :router="false" @select="onSelectMobile">
+      <el-menu-item v-for="item in menuItems" :key="item.key" :index="item.key" :disabled="item.disabled">
+        <component :is="item.icon" class="menu-icon" />
+        <span>{{ item.label }}</span>
+        <el-tag v-if="item.badge" size="small" type="info" class="menu-badge">{{ item.badge }}</el-tag>
+      </el-menu-item>
+    </el-menu>
+  </el-drawer>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, type Component } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
   Bell,
@@ -94,6 +105,8 @@ const menuItems: MenuItem[] = [
 const MENU_STORAGE_KEY = 'finance.activeMenu';
 const activeMenu = ref(localStorage.getItem(MENU_STORAGE_KEY) || 'balance-sheet');
 const isAuthed = ref(!!authStorage.getToken());
+const isMobile = ref(window.innerWidth <= 900);
+const drawerVisible = ref(false);
 const activeView = computed(() => {
   if (!isAuthed.value) {
     return LoginPage;
@@ -127,6 +140,11 @@ const onSelect = (key: string) => {
   localStorage.setItem(MENU_STORAGE_KEY, item.key);
 };
 
+const onSelectMobile = (key: string) => {
+  onSelect(key);
+  drawerVisible.value = false;
+};
+
 const handleLoginSuccess = () => {
   isAuthed.value = true;
 };
@@ -136,7 +154,20 @@ const handleLogout = () => {
   isAuthed.value = false;
 };
 
+const handleResize = () => {
+  isMobile.value = window.innerWidth <= 900;
+  if (!isMobile.value) {
+    drawerVisible.value = false;
+  }
+};
+
 onMounted(() => {
   window.addEventListener('auth:logout', handleLogout);
+  window.addEventListener('resize', handleResize);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('auth:logout', handleLogout);
+  window.removeEventListener('resize', handleResize);
 });
 </script>
