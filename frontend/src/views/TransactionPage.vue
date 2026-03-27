@@ -4,28 +4,33 @@
       <h1>交易记录</h1>
       <div class="light-text">仅收支单据，按日期与分类查询</div>
     </div>
-    <div class="toolbar toolbar-wrap">
-      <el-select v-model="kindFilter" clearable placeholder="类型" style="min-width: 120px" @change="reload">
-        <el-option label="收入" value="income" />
-        <el-option label="支出" value="expense" />
-      </el-select>
-      <el-select v-model="accountFilter" clearable filterable placeholder="账户" style="min-width: 160px" @change="reload">
-        <el-option v-for="account in accounts" :key="account.id" :label="account.name" :value="account.id" />
-      </el-select>
-      <el-select v-model="categoryFilter" clearable filterable placeholder="分类" style="min-width: 160px" @change="reload">
-        <el-option v-for="category in filteredCategories" :key="category.id" :label="category.name" :value="category.id" />
-      </el-select>
-      <el-date-picker
-        v-model="dateRange"
-        type="daterange"
-        range-separator="至"
-        start-placeholder="开始日期"
-        end-placeholder="结束日期"
-        value-format="YYYY-MM-DD"
-        @change="reload"
-      />
-      <el-button type="primary" :icon="Plus" @click="openCreate">新增交易</el-button>
-      <el-button :loading="loading" @click="loadTransactions">刷新</el-button>
+    <div class="toolbar toolbar-transactions">
+      <div class="toolbar-filters">
+        <el-select v-model="kindFilter" clearable placeholder="类型" style="min-width: 120px" @change="reload">
+          <el-option label="收入" value="income" />
+          <el-option label="支出" value="expense" />
+        </el-select>
+        <el-select v-model="accountFilter" clearable filterable placeholder="账户" style="min-width: 160px" @change="reload">
+          <el-option v-for="account in accounts" :key="account.id" :label="account.name" :value="account.id" />
+        </el-select>
+        <el-select v-model="categoryFilter" clearable filterable placeholder="分类" style="min-width: 160px" @change="reload">
+          <el-option v-for="category in filteredCategories" :key="category.id" :label="category.name" :value="category.id" />
+        </el-select>
+        <el-date-picker
+          v-model="dateRange"
+          type="daterange"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          value-format="YYYY-MM-DD"
+          style="min-width: 320px"
+          @change="reload"
+        />
+      </div>
+      <div class="toolbar-actions">
+        <el-button type="primary" :icon="Plus" @click="openCreate">新增交易</el-button>
+        <el-button :loading="loading" @click="loadTransactions">刷新</el-button>
+      </div>
     </div>
   </div>
 
@@ -51,9 +56,10 @@
         </el-table-column>
         <el-table-column prop="description" label="描述" min-width="220" />
         <el-table-column prop="note" label="备注" min-width="200" />
-        <el-table-column label="操作" width="200" align="right">
+        <el-table-column label="操作" width="280" align="right">
           <template #default="{ row }">
             <div class="table-actions">
+              <el-button size="small" @click="openQuickCreateFromRow(row)">快速添加</el-button>
               <el-button size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
               <el-button size="small" type="danger" :icon="Delete" :loading="deletingId === row.transaction_id" @click="confirmDelete(row)">
                 删除
@@ -177,6 +183,11 @@
           <el-option v-for="item in ACCOUNT_TYPES" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </el-form-item>
+      <el-form-item v-if="accountForm.type === 'cash'" label="现金类型">
+        <el-select v-model="accountForm.cashKind" placeholder="选择现金类型" style="width: 100%">
+          <el-option v-for="item in CASH_KINDS" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+      </el-form-item>
       <el-form-item label="币种">
         <el-input v-model="accountForm.currency" placeholder="默认 CNY" />
       </el-form-item>
@@ -222,7 +233,7 @@ import { Delete, Edit, Plus } from '@element-plus/icons-vue';
 import { fetchTransactions, createTransaction, updateTransaction, deleteTransaction, toApiPayload } from '@/api/transaction';
 import { createAccount, fetchAccounts } from '@/api/account';
 import { createCategory, fetchCategories } from '@/api/category';
-import { ACCOUNT_TYPES } from '@/types/account';
+import { ACCOUNT_TYPES, CASH_KINDS } from '@/types/account';
 import type { Account } from '@/types/account';
 import type { Category } from '@/types/category';
 import type { TransactionFormInput, TransactionRow } from '@/types/transaction';
@@ -270,6 +281,7 @@ const accountForm = reactive({
   name: '',
   type: ACCOUNT_TYPES[0].value,
   currency: 'CNY',
+  cashKind: 'bank',
   isActive: true
 });
 
@@ -364,10 +376,25 @@ const openEdit = (row: TransactionRow) => {
   dialogVisible.value = true;
 };
 
+const openQuickCreateFromRow = (row: TransactionRow) => {
+  dialogMode.value = 'create';
+  editingId.value = null;
+  form.kind = row.category_kind;
+  form.occurredOn = row.occurred_on || formatDateISO(new Date());
+  form.accountId = accounts.value.some((item) => item.id === row.account_id) ? row.account_id : accounts.value[0]?.id || 0;
+  const matchedCategory = categories.value.find((item) => item.id === row.category_id && item.kind === row.category_kind);
+  form.categoryId = matchedCategory?.id || categories.value.find((item) => item.kind === row.category_kind)?.id || 0;
+  form.amount = Math.abs(row.amount);
+  form.description = row.description || '';
+  form.note = row.note || '';
+  dialogVisible.value = true;
+};
+
 const openAccountDialog = () => {
   accountForm.name = '';
   accountForm.type = ACCOUNT_TYPES[0].value;
   accountForm.currency = 'CNY';
+  accountForm.cashKind = 'bank';
   accountForm.isActive = true;
   accountDialogVisible.value = true;
 };
@@ -401,6 +428,7 @@ const submitAccount = async () => {
       name: accountForm.name.trim(),
       type: accountForm.type,
       currency: accountForm.currency?.trim() || 'CNY',
+      cash_kind: accountForm.type === 'cash' ? accountForm.cashKind : undefined,
       is_active: accountForm.isActive
     });
     accounts.value = [...accounts.value, created];
@@ -549,18 +577,34 @@ onBeforeUnmount(() => {
 }
 
 .amount-positive {
-  color: #16a34a;
+  color: var(--app-positive);
   font-weight: 600;
 }
 
 .amount-negative {
-  color: #dc2626;
+  color: var(--app-negative);
   font-weight: 600;
 }
 
-.toolbar-wrap {
+.toolbar-transactions {
+  flex-direction: row;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 12px;
+}
+
+.toolbar-filters {
+  display: flex;
+  gap: 10px;
+  flex: 1;
+  flex-wrap: nowrap;
+  min-width: 560px;
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 @media (max-width: 900px) {

@@ -8,6 +8,7 @@ import (
 	"finance-backend/internal/handler/accountsnapshot"
 	"finance-backend/internal/handler/auth"
 	"finance-backend/internal/handler/categories"
+	"finance-backend/internal/handler/goal"
 	"finance-backend/internal/handler/health"
 	"finance-backend/internal/handler/investment"
 	"finance-backend/internal/handler/report"
@@ -32,6 +33,7 @@ func New(cfg config.Config, db *gorm.DB) *gin.Engine {
 		account.RegisterRoutes(api.Group("/accounts"), db)
 		accountsnapshot.RegisterRoutes(api.Group("/account-snapshots"), db)
 		categories.RegisterRoutes(api.Group("/categories"), db)
+		goal.RegisterRoutes(api.Group("/goals"), db)
 		investment.RegisterRoutes(api.Group("/investments"), db)
 		transfer.RegisterRoutes(api.Group("/transfers"), db)
 		transaction.RegisterRoutes(api.Group("/transactions"), db)

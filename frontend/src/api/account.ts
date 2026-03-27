@@ -1,10 +1,11 @@
 import client from './client';
-import { ACCOUNT_TYPES, Account, AccountFormInput, ApiAccount, mapAccount } from '@/types/account';
+import { ACCOUNT_TYPES, Account, AccountFormInput, ApiAccount, CashKind, mapAccount } from '@/types/account';
 
 export type CreateAccountPayload = {
   name: string;
   type: (typeof ACCOUNT_TYPES)[number]['value'];
   currency?: string;
+  cash_kind?: CashKind;
   is_active?: boolean;
 };
 
@@ -34,6 +35,7 @@ export function toApiPayload(input: AccountFormInput): CreateAccountPayload {
     name: input.name,
     type: input.type as (typeof ACCOUNT_TYPES)[number]['value'],
     currency: input.currency,
+    cash_kind: input.type === 'cash' ? input.cashKind : undefined,
     is_active: input.isActive
   };
 }

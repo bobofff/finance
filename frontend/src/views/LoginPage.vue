@@ -65,10 +65,11 @@ const submit = async () => {
 
 .login-card {
   width: min(420px, 92vw);
-  background: #fff;
+  background: var(--app-surface);
   border-radius: 16px;
   padding: 28px 26px;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.1);
+  box-shadow: var(--app-shadow);
+  border: 1px solid var(--app-border-soft);
 }
 
 .login-title {
@@ -78,7 +79,7 @@ const submit = async () => {
 
 .login-subtitle {
   margin-top: 6px;
-  color: #64748b;
+  color: var(--app-text-secondary);
   margin-bottom: 16px;
 }
 
@@ -88,7 +89,7 @@ const submit = async () => {
 
 .login-error {
   margin-top: 12px;
-  color: #dc2626;
+  color: var(--app-negative);
   font-size: 12px;
 }
 </style>

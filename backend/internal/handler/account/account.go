@@ -32,18 +32,19 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB) {
 var allowedTypes = map[string]struct{}{
 	"cash":        {},
 	"liability":   {},
-	"debt":        {},
+	"debt":        {}, // 债权（别人欠我的钱）
 	"investment":  {},
 	"other_asset": {},
 }
 
 // createAccountRequest 新建账户时的请求体。
 type createAccountRequest struct {
-	LedgerID *int   `json:"ledger_id"`              // 账本 ID，可选
-	Name     string `json:"name" binding:"required"` // 账户名称（必填）
-	Type     string `json:"type" binding:"required"` // 账户类型（必填）
-	Currency string `json:"currency"`                // 币种，缺省为 CNY
-	IsActive *bool  `json:"is_active"`               // 是否启用，缺省 true
+	LedgerID *int    `json:"ledger_id"`               // 账本 ID，可选
+	Name     string  `json:"name" binding:"required"` // 账户名称（必填）
+	Type     string  `json:"type" binding:"required"` // 账户类型（必填）
+	Currency string  `json:"currency"`                // 币种，缺省为 CNY
+	CashKind *string `json:"cash_kind"`               // 现金账户用途：bank/broker
+	IsActive *bool   `json:"is_active"`               // 是否启用，缺省 true
 }
 
 // updateAccountRequest 更新账户时的请求体（全部字段可选）。
@@ -51,6 +52,7 @@ type updateAccountRequest struct {
 	Name     *string `json:"name"`      // 新名称
 	Type     *string `json:"type"`      // 新类型
 	Currency *string `json:"currency"`  // 新币种
+	CashKind *string `json:"cash_kind"` // 现金账户用途：bank/broker
 	IsActive *bool   `json:"is_active"` // 新启用状态
 }
 
@@ -70,7 +72,22 @@ func (h Handler) create(c *gin.Context) {
 
 	accountType, ok := normalizeType(req.Type)
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "type must be one of: cash, liability, debt, investment, other_asset"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "type must be one of: cash, liability, debt(receivable), investment, other_asset"})
+		return
+	}
+
+	cashKind := model.CashKindBank
+	if accountType == "cash" {
+		if req.CashKind != nil {
+			normalized, ok := model.NormalizeCashKind(*req.CashKind)
+			if !ok {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "cash_kind must be one of: bank, broker"})
+				return
+			}
+			cashKind = normalized
+		}
+	} else if req.CashKind != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cash_kind can only be set for cash accounts"})
 		return
 	}
 
@@ -98,6 +115,7 @@ func (h Handler) create(c *gin.Context) {
 		Name:     name,
 		Type:     accountType,
 		Currency: currency,
+		CashKind: cashKind,
 		IsActive: isActive,
 	}
 
@@ -157,6 +175,7 @@ func (h Handler) update(c *gin.Context) {
 	}
 
 	updates := map[string]interface{}{}
+	var accountType string
 
 	if req.Name != nil {
 		name := strings.TrimSpace(*req.Name)
@@ -168,16 +187,54 @@ func (h Handler) update(c *gin.Context) {
 	}
 
 	if req.Type != nil {
-		accountType, ok := normalizeType(*req.Type)
+		normalized, ok := normalizeType(*req.Type)
 		if !ok {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "type must be one of: cash, liability, debt, investment, other_asset"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "type must be one of: cash, liability, debt(receivable), investment, other_asset"})
 			return
 		}
-		updates["type"] = accountType
+		accountType = normalized
+		updates["type"] = normalized
 	}
 
 	if req.Currency != nil {
 		updates["currency"] = strings.TrimSpace(*req.Currency)
+	}
+
+	if req.CashKind != nil {
+		normalized, ok := model.NormalizeCashKind(*req.CashKind)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "cash_kind must be one of: bank, broker"})
+			return
+		}
+		if req.Type != nil {
+			if accountType != "cash" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "cash_kind can only be set for cash accounts"})
+				return
+			}
+		} else {
+			var account model.Account
+			if err := h.db.First(&account, id).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+					return
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load account"})
+				return
+			}
+			if strings.ToLower(account.Type) != "cash" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "cash_kind can only be set for cash accounts"})
+				return
+			}
+		}
+		updates["cash_kind"] = normalized
+	}
+
+	if req.Type != nil {
+		if accountType != "cash" {
+			updates["cash_kind"] = model.CashKindBank
+		} else if req.CashKind == nil {
+			updates["cash_kind"] = model.CashKindBank
+		}
 	}
 
 	if req.IsActive != nil {
@@ -241,6 +298,10 @@ func parseID(raw string) (uint, bool) {
 // normalizeType 将类型字符串去空格、转小写，并检查是否在允许列表。
 func normalizeType(input string) (string, bool) {
 	value := strings.ToLower(strings.TrimSpace(input))
+	// 兼容前端/调用方使用 receivable 表达债权类型。
+	if value == "receivable" {
+		value = "debt"
+	}
 	_, ok := allowedTypes[value]
 	return value, ok
 }

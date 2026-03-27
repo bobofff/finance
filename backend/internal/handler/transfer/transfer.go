@@ -85,6 +85,7 @@ func (h Handler) create(c *gin.Context) {
 		if strings.ToLower(fromAccount.Type) != "cash" {
 			return newRequestError("from account must be cash type")
 		}
+		fromKind := model.CoalesceCashKind(string(fromAccount.CashKind))
 
 		var toAccount model.Account
 		if err := tx.Where("id = ? AND ledger_id = ?", req.ToAccountID, ledgerID).First(&toAccount).Error; err != nil {
@@ -98,6 +99,10 @@ func (h Handler) create(c *gin.Context) {
 		}
 		if strings.ToLower(toAccount.Type) != "cash" {
 			return newRequestError("to account must be cash type")
+		}
+		toKind := model.CoalesceCashKind(string(toAccount.CashKind))
+		if fromKind == toKind {
+			return newRequestError("transfer must be between bank and broker cash accounts")
 		}
 
 		txRecord := model.Transaction{

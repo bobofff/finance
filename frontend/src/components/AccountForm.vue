@@ -10,6 +10,12 @@
       </el-select>
     </el-form-item>
 
+    <el-form-item v-if="showCashKind" label="现金类型" prop="cashKind">
+      <el-select v-model="formState.cashKind" placeholder="选择现金类型" @change="emitChange">
+        <el-option v-for="item in CASH_KINDS" :key="item.value" :label="item.label" :value="item.value" />
+      </el-select>
+    </el-form-item>
+
     <el-form-item label="币种" prop="currency">
       <el-input v-model="formState.currency" placeholder="默认 CNY" maxlength="10" @input="emitChange" />
     </el-form-item>
@@ -34,7 +40,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
-import { ACCOUNT_TYPES, type AccountFormInput } from '@/types/account';
+import { ACCOUNT_TYPES, CASH_KINDS, type AccountFormInput } from '@/types/account';
 
 const props = defineProps<{
   modelValue: AccountFormInput;
@@ -51,6 +57,7 @@ const formRef = ref<FormInstance>();
 const formState = reactive<AccountFormInput>({ ...props.modelValue });
 const mode = computed(() => props.mode ?? 'create');
 const loading = computed(() => props.loading ?? false);
+const showCashKind = computed(() => formState.type === 'cash');
 
 watch(
   () => props.modelValue,
@@ -60,12 +67,38 @@ watch(
   { deep: true }
 );
 
+watch(
+  () => formState.type,
+  (val) => {
+    if (val === 'cash' && !formState.cashKind) {
+      formState.cashKind = 'bank';
+      emitChange();
+    }
+  }
+);
+
 const rules: FormRules<AccountFormInput> = {
   name: [
     { required: true, message: '请输入名称', trigger: 'blur' },
     { min: 1, max: 64, message: '名称需在 1-64 字符之间', trigger: 'blur' }
   ],
   type: [{ required: true, message: '请选择类型', trigger: 'change' }],
+  cashKind: [
+    {
+      validator: (_rule, value, callback) => {
+        if (formState.type !== 'cash') {
+          callback();
+          return;
+        }
+        if (!value) {
+          callback(new Error('请选择现金类型'));
+          return;
+        }
+        callback();
+      },
+      trigger: 'change'
+    }
+  ],
   currency: [{ max: 10, message: '币种长度不超过 10', trigger: 'blur' }]
 };
 

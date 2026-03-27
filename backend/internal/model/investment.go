@@ -27,6 +27,7 @@ type InvestmentLot struct {
 	Quantity          float64        `gorm:"column:quantity;not null"`
 	Price             float64        `gorm:"column:price;not null"` // 成本价
 	TradePrice        float64        `gorm:"column:trade_price;not null;default:0"`
+	Tag               string         `gorm:"column:tag"`
 	Fee               float64        `gorm:"column:fee;not null;default:0"`
 	Tax               float64        `gorm:"column:tax;not null;default:0"`
 	DeletedAt         gorm.DeletedAt `gorm:"column:deleted_at;index"`
@@ -74,4 +75,22 @@ type SecurityPrice struct {
 
 func (SecurityPrice) TableName() string {
 	return "fin_security_prices"
+}
+
+type SecurityIndicator struct {
+	LedgerID   int            `gorm:"column:ledger_id;primaryKey"`
+	SecurityID uint           `gorm:"column:security_id;primaryKey"`
+	AsOf       time.Time      `gorm:"column:as_of;type:date;primaryKey"`
+	MA5        *float64       `gorm:"column:ma_5"`
+	High55     *float64       `gorm:"column:high_55"`
+	High20     *float64       `gorm:"column:high_20"`
+	Low10      *float64       `gorm:"column:low_10"`
+	Low20      *float64       `gorm:"column:low_20"`
+	CreatedAt  time.Time      `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt  time.Time      `gorm:"column:updated_at;autoUpdateTime"`
+	DeletedAt  gorm.DeletedAt `gorm:"column:deleted_at;index"`
+}
+
+func (SecurityIndicator) TableName() string {
+	return "fin_security_indicators"
 }

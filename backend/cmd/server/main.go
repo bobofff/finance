@@ -17,6 +17,9 @@ func main() {
 	if err := model.AutoMigrate(database); err != nil {
 		log.Fatalf("auto migrate failed: %v", err)
 	}
+	if err := model.SeedStrategyTemplates(database); err != nil {
+		log.Printf("seed strategy templates failed: %v", err)
+	}
 
 	engine := router.New(cfg, database)
 	if err := engine.Run(cfg.ServerAddr()); err != nil {

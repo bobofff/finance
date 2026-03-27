@@ -204,7 +204,6 @@ func (h Handler) list(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "kind must be income or expense"})
 		return
 	}
-
 	dateFrom, ok := parseDateQuery(c.Query("date_from"), c)
 	if !ok {
 		return

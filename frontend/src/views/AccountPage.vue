@@ -19,6 +19,11 @@
           <span class="badge">{{ formatAccountType(row.type) }}</span>
         </template>
       </el-table-column>
+      <el-table-column label="现金类型" min-width="140">
+        <template #default="{ row }">
+          <span>{{ row.type === 'cash' ? formatCashKind(row.cashKind) : '-' }}</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="currency" label="币种" width="120" />
       <el-table-column label="启用" width="160">
         <template #default="{ row }">
@@ -66,7 +71,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Delete, Edit, Plus, RefreshRight } from '@element-plus/icons-vue';
 import AccountForm from '@/components/AccountForm.vue';
 import { createAccount, deleteAccount, fetchAccounts, toApiPayload, updateAccount } from '@/api/account';
-import { ACCOUNT_TYPES, type Account, type AccountFormInput, formatAccountType } from '@/types/account';
+import { ACCOUNT_TYPES, type Account, type AccountFormInput, formatAccountType, formatCashKind } from '@/types/account';
 
 const accounts = ref<Account[]>([]);
 const loading = ref(false);
@@ -83,6 +88,7 @@ function buildDefaultForm(): AccountFormInput {
     name: '',
     type: ACCOUNT_TYPES[0].value,
     currency: 'CNY',
+    cashKind: 'bank',
     isActive: true
   };
 }
@@ -112,6 +118,7 @@ const openEdit = (account: Account) => {
     name: account.name,
     type: account.type,
     currency: account.currency,
+    cashKind: account.cashKind ?? 'bank',
     isActive: account.isActive
   };
   dialogVisible.value = true;

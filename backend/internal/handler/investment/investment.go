@@ -1,7 +1,10 @@
 package investment
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -27,6 +30,11 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB) {
 	rg.PATCH("/buys/:id", h.updateBuy)
 	rg.DELETE("/buys/:id", h.deleteBuy)
 	rg.POST("/sales", h.createSale)
+	rg.POST("/prices/refresh", h.refreshPrices)
+	rg.GET("/strategies", h.listStrategies)
+	rg.POST("/strategies", h.createStrategy)
+	rg.PATCH("/strategies/:id", h.updateStrategy)
+	rg.DELETE("/strategies/:id", h.deleteStrategy)
 }
 
 type lotRow struct {
@@ -38,6 +46,7 @@ type lotRow struct {
 	Quantity          float64   `gorm:"column:quantity"`
 	Price             float64   `gorm:"column:price"`
 	TradePrice        float64   `gorm:"column:trade_price"`
+	Tag               string    `gorm:"column:tag"`
 	Fee               float64   `gorm:"column:fee"`
 	Tax               float64   `gorm:"column:tax"`
 	TransactionLineID uint      `gorm:"column:transaction_line_id"`
@@ -45,25 +54,38 @@ type lotRow struct {
 	OccurredOn        time.Time `gorm:"column:occurred_on"`
 	AllocatedQuantity float64   `gorm:"column:allocated_quantity"`
 	RemainingQuantity float64   `gorm:"column:remaining_quantity"`
+	CurrentPrice      float64   `gorm:"column:current_price"`
+	MA5               *float64  `gorm:"column:ma_5"`
+	High55            *float64  `gorm:"column:high_55"`
+	High20            *float64  `gorm:"column:high_20"`
+	Low10             *float64  `gorm:"column:low_10"`
+	Low20             *float64  `gorm:"column:low_20"`
 }
 
 type lotResponse struct {
-	LotID             uint    `json:"lot_id"`
-	LedgerID          int     `json:"ledger_id"`
-	SecurityID        uint    `json:"security_id"`
-	SecurityTicker    string  `json:"security_ticker"`
-	SecurityName      string  `json:"security_name"`
-	Quantity          float64 `json:"quantity"`
-	Price             float64 `json:"price"`
-	TradePrice        float64 `json:"trade_price"`
-	Fee               float64 `json:"fee"`
-	Tax               float64 `json:"tax"`
-	TransactionLineID uint    `json:"transaction_line_id"`
-	TransactionID     uint    `json:"transaction_id"`
-	OccurredOn        string  `json:"occurred_on"`
-	AllocatedQuantity float64 `json:"allocated_quantity"`
-	RemainingQuantity float64 `json:"remaining_quantity"`
-	Status            string  `json:"status"`
+	LotID             uint     `json:"lot_id"`
+	LedgerID          int      `json:"ledger_id"`
+	SecurityID        uint     `json:"security_id"`
+	SecurityTicker    string   `json:"security_ticker"`
+	SecurityName      string   `json:"security_name"`
+	Quantity          float64  `json:"quantity"`
+	Price             float64  `json:"price"`
+	TradePrice        float64  `json:"trade_price"`
+	Tag               string   `json:"tag"`
+	Fee               float64  `json:"fee"`
+	Tax               float64  `json:"tax"`
+	TransactionLineID uint     `json:"transaction_line_id"`
+	TransactionID     uint     `json:"transaction_id"`
+	OccurredOn        string   `json:"occurred_on"`
+	AllocatedQuantity float64  `json:"allocated_quantity"`
+	RemainingQuantity float64  `json:"remaining_quantity"`
+	Status            string   `json:"status"`
+	CurrentPrice      float64  `json:"current_price"`
+	MA5               *float64 `json:"ma_5"`
+	High55            *float64 `json:"high_55"`
+	High20            *float64 `json:"high_20"`
+	Low10             *float64 `json:"low_10"`
+	Low20             *float64 `json:"low_20"`
 }
 
 func (h Handler) listLots(c *gin.Context) {
@@ -87,10 +109,161 @@ func (h Handler) listLots(c *gin.Context) {
 		securityID = uint(parsed)
 	}
 
+	var cashAccountID uint
+	if value := strings.TrimSpace(c.Query("cash_account_id")); value != "" {
+		parsed, err := strconv.ParseUint(value, 10, 64)
+		if err != nil || parsed == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid cash_account_id"})
+			return
+		}
+		cashAccountID = uint(parsed)
+	}
+
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
 	if status != "" && status != "open" && status != "closed" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "status must be open or closed"})
 		return
+	}
+	tag := strings.TrimSpace(c.Query("tag"))
+	if tag != "" && !validateLotTag(tag, c) {
+		return
+	}
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	buyDateFrom, err := parseDateQuery(c.Query("buy_date_from"), c)
+	if err != nil {
+		return
+	}
+	buyDateTo, err := parseDateQuery(c.Query("buy_date_to"), c)
+	if err != nil {
+		return
+	}
+	if !buyDateFrom.IsZero() && !buyDateTo.IsZero() && buyDateFrom.After(buyDateTo) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "buy_date_from cannot be after buy_date_to"})
+		return
+	}
+
+	page := parsePage(c.Query("page"))
+	pageSize := parsePageSize(c.Query("page_size"))
+	offset := (page - 1) * pageSize
+
+	filters := []string{"l.deleted_at IS NULL", "l.ledger_id = ?"}
+	filterArgs := []interface{}{ledgerID}
+
+	if securityID != 0 {
+		filters = append(filters, "l.security_id = ?")
+		filterArgs = append(filterArgs, securityID)
+	}
+	if tag != "" {
+		filters = append(filters, "l.tag = ?")
+		filterArgs = append(filterArgs, tag)
+	}
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		filters = append(filters, "(s.ticker ILIKE ? OR s.name ILIKE ?)")
+		filterArgs = append(filterArgs, like, like)
+	}
+	if cashAccountID != 0 {
+		filters = append(filters, `EXISTS (
+  SELECT 1 FROM fin_transaction_lines tcl
+  WHERE tcl.transaction_id = tl.transaction_id
+    AND tcl.deleted_at IS NULL
+    AND tcl.account_id = ?
+)`)
+		filterArgs = append(filterArgs, cashAccountID)
+	}
+	if !buyDateFrom.IsZero() {
+		filters = append(filters, "t.occurred_on >= ?")
+		filterArgs = append(filterArgs, buyDateFrom)
+	}
+	if !buyDateTo.IsZero() {
+		filters = append(filters, "t.occurred_on <= ?")
+		filterArgs = append(filterArgs, buyDateTo)
+	}
+
+	whereClause := "WHERE " + strings.Join(filters, " AND ")
+	havingClause := ""
+	if status == "open" {
+		havingClause = "HAVING (l.quantity - COALESCE(SUM(a.quantity), 0)) > 0"
+	} else if status == "closed" {
+		havingClause = "HAVING (l.quantity - COALESCE(SUM(a.quantity), 0)) <= 0"
+	}
+
+	countQuery := `
+SELECT COUNT(*) FROM (
+  SELECT l.id
+  FROM fin_investment_lots l
+  JOIN fin_transaction_lines tl ON tl.id = l.transaction_line_id AND tl.deleted_at IS NULL
+  JOIN fin_transactions t ON t.id = tl.transaction_id AND t.deleted_at IS NULL
+  JOIN fin_securities s ON s.id = l.security_id AND s.deleted_at IS NULL
+  LEFT JOIN fin_investment_lot_allocations a ON a.buy_lot_id = l.id AND a.deleted_at IS NULL
+  ` + whereClause + `
+  GROUP BY l.id, t.id, tl.id, l.quantity
+  ` + havingClause + `
+) sub`
+
+	var total int64
+	if err := h.db.Raw(countQuery, filterArgs...).Scan(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to count lots"})
+		return
+	}
+
+	type summaryRow struct {
+		LotCount        int64   `gorm:"column:lot_count"`
+		TotalQuantity   float64 `gorm:"column:total_quantity"`
+		TotalCost       float64 `gorm:"column:total_cost"`
+		TotalCostPriced float64 `gorm:"column:total_cost_priced"`
+		TotalMarket     float64 `gorm:"column:total_market"`
+		PricedCount     int64   `gorm:"column:priced_count"`
+	}
+
+	summaryQuery := `
+SELECT
+  COUNT(*) AS lot_count,
+  COALESCE(SUM(x.quantity), 0) AS total_quantity,
+  COALESCE(SUM(x.price * x.quantity), 0) AS total_cost,
+  COALESCE(SUM(CASE WHEN x.close_price IS NOT NULL THEN x.price * x.quantity ELSE 0 END), 0) AS total_cost_priced,
+  COALESCE(SUM(CASE WHEN x.close_price IS NOT NULL THEN x.close_price * x.quantity ELSE 0 END), 0) AS total_market,
+  COALESCE(SUM(CASE WHEN x.close_price IS NOT NULL THEN 1 ELSE 0 END), 0) AS priced_count
+FROM (
+  SELECT l.id, l.quantity, l.price, cp.close_price
+  FROM fin_investment_lots l
+  JOIN fin_transaction_lines tl ON tl.id = l.transaction_line_id AND tl.deleted_at IS NULL
+  JOIN fin_transactions t ON t.id = tl.transaction_id AND t.deleted_at IS NULL
+  JOIN fin_securities s ON s.id = l.security_id AND s.deleted_at IS NULL
+  LEFT JOIN (
+    SELECT p.security_id, p.close_price
+    FROM fin_security_prices p
+    JOIN (
+      SELECT security_id, MAX(price_at) AS max_price_at
+      FROM fin_security_prices
+      WHERE ledger_id = ? AND deleted_at IS NULL
+      GROUP BY security_id
+    ) latest
+    ON p.security_id = latest.security_id AND p.price_at = latest.max_price_at
+    WHERE p.ledger_id = ? AND p.deleted_at IS NULL
+  ) cp ON cp.security_id = l.security_id
+  LEFT JOIN fin_investment_lot_allocations a ON a.buy_lot_id = l.id AND a.deleted_at IS NULL
+  ` + whereClause + `
+  GROUP BY l.id, l.quantity, l.price, cp.close_price, t.id, tl.id
+  ` + havingClause + `
+) x`
+
+	var summary summaryRow
+	summaryArgs := []interface{}{ledgerID, ledgerID}
+	summaryArgs = append(summaryArgs, filterArgs...)
+	if err := h.db.Raw(summaryQuery, summaryArgs...).Scan(&summary).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to summarize lots"})
+		return
+	}
+
+	hasMarket := summary.PricedCount > 0
+	profit := 0.0
+	profitPct := 0.0
+	if hasMarket {
+		profit = summary.TotalMarket - summary.TotalCostPriced
+		if summary.TotalCostPriced > 0 {
+			profitPct = profit / summary.TotalCostPriced
+		}
 	}
 
 	query := `
@@ -103,27 +276,56 @@ SELECT
   l.quantity,
   l.price,
   l.trade_price,
+  l.tag,
   l.fee,
   l.tax,
   tl.id AS transaction_line_id,
   t.id AS transaction_id,
   t.occurred_on,
   COALESCE(SUM(a.quantity), 0) AS allocated_quantity,
-  (l.quantity - COALESCE(SUM(a.quantity), 0)) AS remaining_quantity
+  (l.quantity - COALESCE(SUM(a.quantity), 0)) AS remaining_quantity,
+  cp.close_price AS current_price,
+  ind.ma_5,
+  ind.high_55,
+  ind.high_20,
+  ind.low_10,
+  ind.low_20
 FROM fin_investment_lots l
 JOIN fin_transaction_lines tl ON tl.id = l.transaction_line_id AND tl.deleted_at IS NULL
 JOIN fin_transactions t ON t.id = tl.transaction_id AND t.deleted_at IS NULL
 JOIN fin_securities s ON s.id = l.security_id AND s.deleted_at IS NULL
+LEFT JOIN (
+  SELECT p.security_id, p.close_price
+  FROM fin_security_prices p
+  JOIN (
+    SELECT security_id, MAX(price_at) AS max_price_at
+    FROM fin_security_prices
+    WHERE ledger_id = ? AND deleted_at IS NULL
+    GROUP BY security_id
+  ) latest
+  ON p.security_id = latest.security_id AND p.price_at = latest.max_price_at
+  WHERE p.ledger_id = ? AND p.deleted_at IS NULL
+) cp ON cp.security_id = l.security_id
+LEFT JOIN (
+  SELECT i.security_id, i.ma_5, i.high_55, i.high_20, i.low_10, i.low_20
+  FROM fin_security_indicators i
+  JOIN (
+    SELECT security_id, MAX(as_of) AS max_as_of
+    FROM fin_security_indicators
+    WHERE ledger_id = ? AND deleted_at IS NULL
+    GROUP BY security_id
+  ) latest_i
+  ON i.security_id = latest_i.security_id AND i.as_of = latest_i.max_as_of
+  WHERE i.ledger_id = ? AND i.deleted_at IS NULL
+) ind ON ind.security_id = l.security_id
 LEFT JOIN fin_investment_lot_allocations a ON a.buy_lot_id = l.id AND a.deleted_at IS NULL
-WHERE l.deleted_at IS NULL AND l.ledger_id = ?`
+` + whereClause
 
-	args := []interface{}{ledgerID}
-	if securityID != 0 {
-		query += " AND l.security_id = ?"
-		args = append(args, securityID)
-	}
+	query += " GROUP BY l.id, s.id, tl.id, t.id, l.tag, cp.close_price, ind.ma_5, ind.high_55, ind.high_20, ind.low_10, ind.low_20 " + havingClause + " ORDER BY s.ticker DESC, t.occurred_on DESC, l.id DESC LIMIT ? OFFSET ?"
 
-	query += " GROUP BY l.id, s.id, tl.id, t.id"
+	args := []interface{}{ledgerID, ledgerID, ledgerID, ledgerID}
+	args = append(args, filterArgs...)
+	args = append(args, pageSize, offset)
 
 	var rows []lotRow
 	if err := h.db.Raw(query, args...).Scan(&rows).Error; err != nil {
@@ -137,9 +339,6 @@ WHERE l.deleted_at IS NULL AND l.ledger_id = ?`
 		if row.RemainingQuantity <= 0 {
 			state = "closed"
 		}
-		if status != "" && status != state {
-			continue
-		}
 		resp = append(resp, lotResponse{
 			LotID:             row.LotID,
 			LedgerID:          row.LedgerID,
@@ -149,6 +348,7 @@ WHERE l.deleted_at IS NULL AND l.ledger_id = ?`
 			Quantity:          row.Quantity,
 			Price:             row.Price,
 			TradePrice:        row.TradePrice,
+			Tag:               row.Tag,
 			Fee:               row.Fee,
 			Tax:               row.Tax,
 			TransactionLineID: row.TransactionLineID,
@@ -157,10 +357,28 @@ WHERE l.deleted_at IS NULL AND l.ledger_id = ?`
 			AllocatedQuantity: row.AllocatedQuantity,
 			RemainingQuantity: row.RemainingQuantity,
 			Status:            state,
+			CurrentPrice:      row.CurrentPrice,
+			MA5:               row.MA5,
+			High55:            row.High55,
+			High20:            row.High20,
+			Low10:             row.Low10,
+			Low20:             row.Low20,
 		})
 	}
 
-	c.JSON(http.StatusOK, resp)
+	c.JSON(http.StatusOK, gin.H{
+		"data":  resp,
+		"total": total,
+		"summary": gin.H{
+			"total_quantity": summary.TotalQuantity,
+			"total_cost":     summary.TotalCost,
+			"total_market":   summary.TotalMarket,
+			"profit":         profit,
+			"profit_pct":     profitPct,
+			"has_market":     hasMarket,
+			"partial_market": hasMarket && summary.PricedCount != summary.LotCount,
+		},
+	})
 }
 
 type saleAllocation struct {
@@ -205,6 +423,7 @@ type createBuyRequest struct {
 	InvestmentAccountID uint    `json:"investment_account_id" binding:"required,gt=0"`
 	Quantity            float64 `json:"quantity" binding:"required,gt=0"`
 	Price               float64 `json:"price" binding:"required,gt=0"`
+	Tag                 string  `json:"tag"`
 	Fee                 float64 `json:"fee"`
 	FeeCategoryID       *int    `json:"fee_category_id"`
 	Tax                 float64 `json:"tax"`
@@ -257,6 +476,11 @@ func (h Handler) createBuy(c *gin.Context) {
 		return
 	}
 
+	tag := strings.TrimSpace(req.Tag)
+	if !validateLotTag(tag, c) {
+		return
+	}
+
 	var response createBuyResponse
 
 	err = h.db.Transaction(func(tx *gorm.DB) error {
@@ -274,6 +498,12 @@ func (h Handler) createBuy(c *gin.Context) {
 		}
 		if !cashAccount.IsActive {
 			return newRequestError("cash account is inactive")
+		}
+		if strings.ToLower(cashAccount.Type) != "cash" {
+			return newRequestError("cash_account_id must be a cash account")
+		}
+		if model.CoalesceCashKind(string(cashAccount.CashKind)) != model.CashKindBroker {
+			return newRequestError("cash_account_id must be a broker cash account")
 		}
 
 		var investmentAccount model.Account
@@ -368,6 +598,7 @@ func (h Handler) createBuy(c *gin.Context) {
 			Quantity:          req.Quantity,
 			Price:             costPrice,
 			TradePrice:        req.Price,
+			Tag:               tag,
 			Fee:               req.Fee,
 			Tax:               req.Tax,
 		}
@@ -441,6 +672,11 @@ func (h Handler) updateBuy(c *gin.Context) {
 		return
 	}
 
+	tag := strings.TrimSpace(req.Tag)
+	if !validateLotTag(tag, c) {
+		return
+	}
+
 	var response createBuyResponse
 
 	err = h.db.Transaction(func(tx *gorm.DB) error {
@@ -495,6 +731,12 @@ func (h Handler) updateBuy(c *gin.Context) {
 		}
 		if !cashAccount.IsActive {
 			return newRequestError("cash account is inactive")
+		}
+		if strings.ToLower(cashAccount.Type) != "cash" {
+			return newRequestError("cash_account_id must be a cash account")
+		}
+		if model.CoalesceCashKind(string(cashAccount.CashKind)) != model.CashKindBroker {
+			return newRequestError("cash_account_id must be a broker cash account")
 		}
 
 		var investmentAccount model.Account
@@ -584,6 +826,7 @@ func (h Handler) updateBuy(c *gin.Context) {
 		lot.Quantity = req.Quantity
 		lot.Price = costPrice
 		lot.TradePrice = req.Price
+		lot.Tag = tag
 		lot.Fee = req.Fee
 		lot.Tax = req.Tax
 		if err := tx.Save(&lot).Error; err != nil {
@@ -665,14 +908,55 @@ func (h Handler) deleteBuy(c *gin.Context) {
 			return err
 		}
 
+		var cashAccountID uint
+		if err := tx.Table("fin_transaction_lines tl").
+			Joins("JOIN fin_accounts a ON a.id = tl.account_id AND a.deleted_at IS NULL").
+			Where("tl.transaction_id = ? AND tl.ledger_id = ? AND tl.deleted_at IS NULL", line.TransactionID, ledgerID).
+			Where("LOWER(a.type) = ?", "cash").
+			Select("tl.account_id").
+			Limit(1).
+			Scan(&cashAccountID).Error; err != nil {
+			return err
+		}
+		if cashAccountID == 0 {
+			return newRequestError("cash account not found for buy lot")
+		}
+
+		refundAmount := line.Amount
+		if refundAmount < 0 {
+			refundAmount = -refundAmount
+		}
+
+		refundTx := model.Transaction{
+			LedgerID:    ledgerID,
+			OccurredOn:  time.Now(),
+			Description: fmt.Sprintf("删除买入批次退款 %d", lotID),
+		}
+		if err := tx.Create(&refundTx).Error; err != nil {
+			return err
+		}
+
+		refundCashLine := model.TransactionLine{
+			LedgerID:      ledgerID,
+			TransactionID: refundTx.ID,
+			AccountID:     cashAccountID,
+			Amount:        refundAmount,
+		}
+		if err := tx.Create(&refundCashLine).Error; err != nil {
+			return err
+		}
+
+		refundInvestmentLine := model.TransactionLine{
+			LedgerID:      ledgerID,
+			TransactionID: refundTx.ID,
+			AccountID:     line.AccountID,
+			Amount:        -refundAmount,
+		}
+		if err := tx.Create(&refundInvestmentLine).Error; err != nil {
+			return err
+		}
+
 		if err := tx.Delete(&model.InvestmentLot{}, lotID).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("transaction_id = ? AND ledger_id = ?", line.TransactionID, ledgerID).
-			Delete(&model.TransactionLine{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Delete(&model.Transaction{}, line.TransactionID).Error; err != nil {
 			return err
 		}
 
@@ -763,6 +1047,12 @@ func (h Handler) createSale(c *gin.Context) {
 		}
 		if !cashAccount.IsActive {
 			return newRequestError("cash account is inactive")
+		}
+		if strings.ToLower(cashAccount.Type) != "cash" {
+			return newRequestError("cash_account_id must be a cash account")
+		}
+		if model.CoalesceCashKind(string(cashAccount.CashKind)) != model.CashKindBroker {
+			return newRequestError("cash_account_id must be a broker cash account")
 		}
 
 		var investmentAccount model.Account
@@ -953,6 +1243,377 @@ func (h Handler) createSale(c *gin.Context) {
 	c.JSON(http.StatusCreated, response)
 }
 
+type refreshPricesResponse struct {
+	Requested int      `json:"requested"`
+	Updated   int      `json:"updated"`
+	Skipped   int      `json:"skipped"`
+	Failed    []string `json:"failed,omitempty"`
+}
+
+type openSecurityRow struct {
+	SecurityID uint   `gorm:"column:security_id"`
+	Ticker     string `gorm:"column:ticker"`
+}
+
+func (h Handler) refreshPrices(c *gin.Context) {
+	ledgerID := 1
+	if value := strings.TrimSpace(c.Query("ledger_id")); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid ledger_id"})
+			return
+		}
+		ledgerID = parsed
+	}
+	historyDays := 0
+	if value := strings.TrimSpace(c.Query("history_days")); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid history_days"})
+			return
+		}
+		if parsed > 365 {
+			parsed = 365
+		}
+		historyDays = parsed
+	}
+
+	query := `
+SELECT l.security_id, s.ticker
+FROM fin_investment_lots l
+JOIN fin_securities s ON s.id = l.security_id AND s.deleted_at IS NULL
+LEFT JOIN fin_investment_lot_allocations a ON a.buy_lot_id = l.id AND a.deleted_at IS NULL
+WHERE l.deleted_at IS NULL AND l.ledger_id = ?
+GROUP BY l.id, s.ticker
+HAVING l.quantity - COALESCE(SUM(a.quantity), 0) > 0`
+
+	var rows []openSecurityRow
+	if err := h.db.Raw(query, ledgerID).Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query open lots"})
+		return
+	}
+
+	securityMap := make(map[uint]string, len(rows))
+	for _, row := range rows {
+		if row.SecurityID == 0 || strings.TrimSpace(row.Ticker) == "" {
+			continue
+		}
+		securityMap[row.SecurityID] = row.Ticker
+	}
+	securityIDs := make([]uint, 0, len(securityMap))
+	for securityID := range securityMap {
+		securityIDs = append(securityIDs, securityID)
+	}
+
+	if len(securityMap) == 0 {
+		c.JSON(http.StatusOK, refreshPricesResponse{Requested: 0, Updated: 0, Skipped: 0})
+		return
+	}
+
+	securityToCode := make(map[uint]string, len(securityMap))
+	skipped := 0
+	for securityID, ticker := range securityMap {
+		code, ok := toSinaCode(ticker)
+		if !ok {
+			skipped++
+			continue
+		}
+		securityToCode[securityID] = code
+	}
+
+	if len(securityToCode) == 0 {
+		c.JSON(http.StatusOK, refreshPricesResponse{Requested: len(securityMap), Updated: 0, Skipped: skipped})
+		return
+	}
+
+	codeToSecurity := make(map[string]uint, len(securityToCode))
+	codes := make([]string, 0, len(securityToCode))
+	for securityID, code := range securityToCode {
+		codeToSecurity[code] = securityID
+		codes = append(codes, code)
+	}
+
+	priceMap := make(map[uint]float64, len(codes))
+	failed := make([]string, 0)
+	client := &http.Client{Timeout: 8 * time.Second}
+	const batchSize = 50
+	for start := 0; start < len(codes); start += batchSize {
+		end := start + batchSize
+		if end > len(codes) {
+			end = len(codes)
+		}
+		batch := codes[start:end]
+		prices, err := fetchSinaPrices(client, batch)
+		if err != nil {
+			failed = append(failed, fmt.Sprintf("batch %d-%d: %v", start, end-1, err))
+			continue
+		}
+		for code, price := range prices {
+			if securityID, ok := codeToSecurity[code]; ok && price > 0 {
+				priceMap[securityID] = price
+			}
+		}
+	}
+
+	if len(priceMap) == 0 {
+		c.JSON(http.StatusOK, refreshPricesResponse{Requested: len(securityMap), Updated: 0, Skipped: skipped, Failed: failed})
+		return
+	}
+
+	now := time.Now().In(time.Local)
+	priceAt := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+
+	needHistory := make(map[uint]bool, len(securityIDs))
+	if historyDays > 1 {
+		lookbackDays := historyDays * 2
+		if lookbackDays < historyDays {
+			lookbackDays = historyDays
+		}
+		cutoff := priceAt.AddDate(0, 0, -lookbackDays+1)
+
+		type countRow struct {
+			SecurityID uint  `gorm:"column:security_id"`
+			Count      int64 `gorm:"column:cnt"`
+		}
+		var counts []countRow
+		if err := h.db.Table("fin_security_prices").
+			Select("security_id, COUNT(*) AS cnt").
+			Where("ledger_id = ? AND security_id IN ? AND deleted_at IS NULL AND price_at >= ?", ledgerID, securityIDs, cutoff).
+			Group("security_id").
+			Scan(&counts).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query price history"})
+			return
+		}
+
+		countMap := make(map[uint]int64, len(counts))
+		for _, row := range counts {
+			countMap[row.SecurityID] = row.Count
+		}
+		for _, securityID := range securityIDs {
+			if countMap[securityID] < int64(historyDays) {
+				needHistory[securityID] = true
+			}
+		}
+	}
+	records := make([]model.SecurityPrice, 0, len(priceMap))
+	for securityID, price := range priceMap {
+		records = append(records, model.SecurityPrice{
+			LedgerID:   ledgerID,
+			SecurityID: securityID,
+			PriceAt:    priceAt,
+			ClosePrice: price,
+		})
+	}
+
+	if historyDays > 1 {
+		for securityID, code := range securityToCode {
+			if !needHistory[securityID] {
+				continue
+			}
+			history, err := fetchSinaHistory(client, code, historyDays)
+			if err != nil {
+				failed = append(failed, fmt.Sprintf("%s history: %v", code, err))
+				continue
+			}
+			for _, item := range history {
+				records = append(records, model.SecurityPrice{
+					LedgerID:   ledgerID,
+					SecurityID: securityID,
+					PriceAt:    item.Date,
+					ClosePrice: item.Close,
+				})
+			}
+		}
+	}
+
+	if err := h.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "ledger_id"}, {Name: "security_id"}, {Name: "price_at"}},
+		DoUpdates: clause.AssignmentColumns([]string{"close_price"}),
+	}).Create(&records).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upsert prices"})
+		return
+	}
+
+	if err := h.updateIndicators(ledgerID, priceAt, securityIDs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update indicators"})
+		return
+	}
+
+	c.JSON(http.StatusOK, refreshPricesResponse{
+		Requested: len(securityMap),
+		Updated:   len(records),
+		Skipped:   skipped,
+		Failed:    failed,
+	})
+}
+
+type priceHistoryRow struct {
+	SecurityID uint    `gorm:"column:security_id"`
+	ClosePrice float64 `gorm:"column:close_price"`
+}
+
+func (h Handler) updateIndicators(ledgerID int, asOf time.Time, securityIDs []uint) error {
+	if len(securityIDs) == 0 {
+		return nil
+	}
+
+	var rows []priceHistoryRow
+	if err := h.db.Table("fin_security_prices").
+		Select("security_id, close_price").
+		Where("ledger_id = ? AND security_id IN ? AND deleted_at IS NULL", ledgerID, securityIDs).
+		Order("security_id, price_at DESC").
+		Scan(&rows).Error; err != nil {
+		return err
+	}
+
+	seriesMap := make(map[uint][]float64, len(securityIDs))
+	for _, row := range rows {
+		seriesMap[row.SecurityID] = append(seriesMap[row.SecurityID], row.ClosePrice)
+	}
+
+	indicators := make([]model.SecurityIndicator, 0, len(securityIDs))
+	for _, securityID := range securityIDs {
+		values := seriesMap[securityID]
+		ma5 := movingAverage(values, 5)
+		high55, _ := windowStats(values, 55)
+		high20, _ := windowStats(values, 20)
+		_, low10 := windowStats(values, 10)
+		_, low20 := windowStats(values, 20)
+
+		indicators = append(indicators, model.SecurityIndicator{
+			LedgerID:   ledgerID,
+			SecurityID: securityID,
+			AsOf:       asOf,
+			MA5:        ma5,
+			High55:     high55,
+			High20:     high20,
+			Low10:      low10,
+			Low20:      low20,
+		})
+	}
+
+	if len(indicators) == 0 {
+		return nil
+	}
+
+	return h.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "ledger_id"},
+			{Name: "security_id"},
+			{Name: "as_of"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{"ma_5", "high_55", "high_20", "low_10", "low_20", "updated_at"}),
+	}).Create(&indicators).Error
+}
+
+func windowStats(values []float64, n int) (*float64, *float64) {
+	if len(values) < n || n <= 0 {
+		return nil, nil
+	}
+	maxV := values[0]
+	minV := values[0]
+	for _, v := range values[1:n] {
+		if v > maxV {
+			maxV = v
+		}
+		if v < minV {
+			minV = v
+		}
+	}
+	return &maxV, &minV
+}
+
+func movingAverage(values []float64, n int) *float64 {
+	if len(values) < n || n <= 0 {
+		return nil
+	}
+	sum := 0.0
+	for _, v := range values[:n] {
+		sum += v
+	}
+	avg := sum / float64(n)
+	return &avg
+}
+
+type historyItem struct {
+	Date  time.Time
+	Close float64
+}
+
+type sinaHistoryItem struct {
+	Day   string `json:"day"`
+	Date  string `json:"date"`
+	Close string `json:"close"`
+}
+
+func fetchSinaHistory(client *http.Client, code string, days int) ([]historyItem, error) {
+	if days <= 0 {
+		return nil, nil
+	}
+	urls := []string{
+		fmt.Sprintf("https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketData.getKLineData?symbol=%s&scale=240&ma=no&datalen=%d", code, days),
+		fmt.Sprintf("https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=%s&scale=240&ma=no&datalen=%d", code, days),
+		fmt.Sprintf("http://quotes.sina.cn/cn/api/json_v2.php/CN_MarketData.getKLineData?symbol=%s&scale=240&ma=no&datalen=%d", code, days),
+	}
+	var lastErr error
+	for _, url := range urls {
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Referer", "https://finance.sina.com.cn")
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("unexpected status: %d", resp.StatusCode)
+			continue
+		}
+
+		var raw []sinaHistoryItem
+		if err := json.Unmarshal(body, &raw); err != nil {
+			lastErr = err
+			continue
+		}
+		items := make([]historyItem, 0, len(raw))
+		for _, item := range raw {
+			dateStr := strings.TrimSpace(item.Day)
+			if dateStr == "" {
+				dateStr = strings.TrimSpace(item.Date)
+			}
+			if dateStr == "" {
+				continue
+			}
+			day, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
+			if err != nil {
+				continue
+			}
+			closeStr := strings.TrimSpace(item.Close)
+			if closeStr == "" {
+				continue
+			}
+			closePrice, err := strconv.ParseFloat(closeStr, 64)
+			if err != nil || closePrice <= 0 {
+				continue
+			}
+			items = append(items, historyItem{Date: day, Close: closePrice})
+		}
+		return items, nil
+	}
+	return nil, lastErr
+}
+
 type requestError struct {
 	message string
 }
@@ -971,6 +1632,172 @@ func parseUintID(raw string) (uint, bool) {
 		return 0, false
 	}
 	return uint(value), true
+}
+
+func parsePage(value string) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed <= 0 {
+		return 1
+	}
+	return parsed
+}
+
+func parsePageSize(value string) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed <= 0 {
+		return 20
+	}
+	if parsed > 200 {
+		return 200
+	}
+	return parsed
+}
+
+func parseDateQuery(value string, c *gin.Context) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.ParseInLocation("2006-01-02", value, time.Local)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "date must be YYYY-MM-DD"})
+		return time.Time{}, err
+	}
+	return parsed, nil
+}
+
+func validateLotTag(value string, c *gin.Context) bool {
+	if value == "" {
+		return true
+	}
+	switch value {
+	case "建仓", "定投", "打野":
+		return true
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tag must be one of: 建仓, 定投, 打野"})
+		return false
+	}
+}
+
+func toSinaCode(ticker string) (string, bool) {
+	value := strings.ToLower(strings.TrimSpace(ticker))
+	if value == "" {
+		return "", false
+	}
+	if strings.HasPrefix(value, "sh") || strings.HasPrefix(value, "sz") || strings.HasPrefix(value, "bj") {
+		if len(value) > 2 {
+			return value, true
+		}
+	}
+	if strings.Contains(value, ".") {
+		parts := strings.Split(value, ".")
+		if len(parts) == 2 {
+			code := parts[0]
+			exch := strings.ToLower(parts[1])
+			switch exch {
+			case "sh":
+				return "sh" + code, true
+			case "sz":
+				return "sz" + code, true
+			case "bj":
+				return "bj" + code, true
+			}
+		}
+	}
+	if len(value) != 6 {
+		return "", false
+	}
+	if _, err := strconv.Atoi(value); err != nil {
+		return "", false
+	}
+	switch value[0] {
+	case '5', '6', '9':
+		return "sh" + value, true
+	case '0', '1', '2', '3':
+		return "sz" + value, true
+	case '4', '8':
+		return "bj" + value, true
+	default:
+		return "", false
+	}
+}
+
+func fetchSinaPrices(client *http.Client, codes []string) (map[string]float64, error) {
+	if len(codes) == 0 {
+		return map[string]float64{}, nil
+	}
+	urls := []string{
+		"https://hq.sinajs.cn/list=" + strings.Join(codes, ","),
+		"http://hq.sinajs.cn/list=" + strings.Join(codes, ","),
+	}
+	var lastErr error
+	for _, url := range urls {
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Referer", "https://finance.sina.com.cn")
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("unexpected status: %d", resp.StatusCode)
+			continue
+		}
+		return parseSinaResponse(string(body)), nil
+	}
+	return nil, lastErr
+}
+
+func parseSinaResponse(body string) map[string]float64 {
+	result := make(map[string]float64)
+	lines := strings.Split(body, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		idx := strings.Index(line, "hq_str_")
+		if idx == -1 {
+			continue
+		}
+		rest := line[idx+len("hq_str_"):]
+		eq := strings.Index(rest, "=")
+		if eq == -1 {
+			continue
+		}
+		code := strings.TrimSpace(rest[:eq])
+		firstQuote := strings.Index(line, "\"")
+		lastQuote := strings.LastIndex(line, "\"")
+		if firstQuote == -1 || lastQuote <= firstQuote {
+			continue
+		}
+		payload := line[firstQuote+1 : lastQuote]
+		if payload == "" {
+			continue
+		}
+		fields := strings.Split(payload, ",")
+		if len(fields) < 4 {
+			continue
+		}
+		price, err := strconv.ParseFloat(strings.TrimSpace(fields[3]), 64)
+		if err != nil {
+			continue
+		}
+		result[code] = price
+	}
+	return result
 }
 
 func resolveSecurity(tx *gorm.DB, ledgerID int, securityID *uint, tickerRaw string, nameRaw string) (model.Security, error) {

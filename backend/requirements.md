@@ -3,7 +3,7 @@
 本文梳理个人资产系统需求、现有骨架能力与数据库设计，便于后续迭代。
 
 ## 业务需求
-- 账户与期初：管理现金/负债/债务/投资等账户，记录期初资产/负债，随时查看当前资产负债表。
+- 账户与期初：管理现金/负债/债权/投资等账户，记录期初资产/负债，随时查看当前资产负债表。
 - 收入/支出（按日）：单笔收支精确到“日”；按月/年统计分类维度和总览。
 - 转账：账户间转账不影响损益，但影响账户余额。
 - 投资：记录入金/出金、买入/卖出，跟踪持仓、已实现/未实现盈亏；可按月/年聚合。
@@ -15,7 +15,7 @@
 - `.env` 会在程序启动时自动加载，不覆盖已有环境变量。
 
 ## 数据模型（SQL 文件为准）
-- `fin_accounts`：账户主数据。字段：`id`、`name`、`type`（`cash|liability|debt|investment|other_asset`）、`currency`（默认 CNY）、`is_active`、`created_at`、`deleted_at`。
+- `fin_accounts`：账户主数据。字段：`id`、`name`、`type`（`cash|liability|debt|investment|other_asset`，其中 `debt` 表示债权/应收） 、`cash_kind`（`bank|broker`，仅现金账户使用）、`currency`（默认 CNY）、`is_active`、`created_at`、`deleted_at`。
 - `fin_account_snapshots`：账户期初/快照。字段：`id`、`account_id`、`as_of`(date)、`amount`、`note`，唯一 `(account_id, as_of)`。
 - `fin_categories`：收支/转账/投资分类（自引用层级）。字段：`id`、`name`、`kind`（`income|expense|transfer|investment`）、`parent_id`、`deleted_at`；同层级 `(parent_id, name)` 唯一。
 - `fin_transactions`：交易主表，`occurred_on`(date) 表示记账日，含摘要/备注、软删标记。
