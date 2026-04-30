@@ -2,6 +2,7 @@
   "name": "finance-frontend",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@8.15.9",
   "type": "module",
   "scripts": {
     "dev": "vite",
