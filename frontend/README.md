@@ -13,7 +13,13 @@ cd frontend
 npm install
 npm run dev
 ```
-默认开发端口 `5173`，`vite.config.ts` 已将 `/api` 代理到 `http://localhost:8888`，请确保后端在该端口运行。
+默认开发端口 `5173`，`vite.config.ts` 已将 `/api` 代理到 `http://127.0.0.1:8888`，请确保后端在该端口运行。
+
+如需改到其他后端地址，可在前端目录设置环境变量：
+```bash
+VITE_API_PROXY_TARGET=http://127.0.0.1:8888
+```
+使用 `127.0.0.1` 而不是 `localhost` 可以避免部分环境里 `localhost -> ::1` 时出现 `ECONNREFUSED ::1:8888`。
 
 ## 构建
 ```bash

@@ -45,8 +45,9 @@ export async function deleteCategory(id: number): Promise<void> {
   await client.delete(`/categories/${id}`);
 }
 
-export function toApiPayload(input: CategoryFormInput): CreateCategoryPayload {
+export function toApiPayload(input: CategoryFormInput, ledgerId = 1): CreateCategoryPayload {
   return {
+    ledger_id: ledgerId,
     name: input.name,
     kind: input.kind,
     parent_id: input.parentId ?? null

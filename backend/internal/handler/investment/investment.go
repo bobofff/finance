@@ -1425,6 +1425,7 @@ HAVING l.quantity - COALESCE(SUM(a.quantity), 0) > 0`
 			}
 		}
 	}
+	records = dedupeSecurityPrices(records)
 
 	if err := h.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "ledger_id"}, {Name: "security_id"}, {Name: "price_at"}},
@@ -1538,6 +1539,35 @@ func movingAverage(values []float64, n int) *float64 {
 type historyItem struct {
 	Date  time.Time
 	Close float64
+}
+
+type securityPriceKey struct {
+	LedgerID   int
+	SecurityID uint
+	PriceAt    string
+}
+
+func dedupeSecurityPrices(records []model.SecurityPrice) []model.SecurityPrice {
+	if len(records) < 2 {
+		return records
+	}
+
+	seen := make(map[securityPriceKey]struct{}, len(records))
+	deduped := records[:0]
+	for _, record := range records {
+		key := securityPriceKey{
+			LedgerID:   record.LedgerID,
+			SecurityID: record.SecurityID,
+			PriceAt:    record.PriceAt.Format("2006-01-02"),
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		deduped = append(deduped, record)
+	}
+
+	return deduped
 }
 
 type sinaHistoryItem struct {

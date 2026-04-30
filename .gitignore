@@ -1,6 +1,7 @@
 # Binaries and build artifacts
 tmp/
 bin/
+*.zip
 *.exe
 *.exe~
 *.dll
@@ -18,3 +19,9 @@ bin/
 .DS_Store
 .idea/
 .vscode/
+
+.gocache
+
+# Runtime logs
+logs/*.log
+!logs/.gitkeep

@@ -2,6 +2,7 @@ import client from './client';
 import { ACCOUNT_TYPES, Account, AccountFormInput, ApiAccount, CashKind, mapAccount } from '@/types/account';
 
 export type CreateAccountPayload = {
+  ledger_id?: number;
   name: string;
   type: (typeof ACCOUNT_TYPES)[number]['value'];
   currency?: string;
@@ -30,8 +31,9 @@ export async function deleteAccount(id: number): Promise<void> {
   await client.delete(`/accounts/${id}`);
 }
 
-export function toApiPayload(input: AccountFormInput): CreateAccountPayload {
+export function toApiPayload(input: AccountFormInput, ledgerId = 1): CreateAccountPayload {
   return {
+    ledger_id: ledgerId,
     name: input.name,
     type: input.type as (typeof ACCOUNT_TYPES)[number]['value'],
     currency: input.currency,

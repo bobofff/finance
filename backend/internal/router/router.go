@@ -1,11 +1,13 @@
 package router
 
 import (
+	"log/slog"
 	"strings"
 
 	"finance-backend/internal/config"
 	"finance-backend/internal/handler/account"
 	"finance-backend/internal/handler/accountsnapshot"
+	"finance-backend/internal/handler/ai"
 	"finance-backend/internal/handler/auth"
 	"finance-backend/internal/handler/categories"
 	"finance-backend/internal/handler/goal"
@@ -14,16 +16,17 @@ import (
 	"finance-backend/internal/handler/report"
 	"finance-backend/internal/handler/transaction"
 	"finance-backend/internal/handler/transfer"
+	"finance-backend/internal/logging"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
-func New(cfg config.Config, db *gorm.DB) *gin.Engine {
+func New(cfg config.Config, db *gorm.DB, logger *slog.Logger) *gin.Engine {
 	setGinMode(cfg.AppEnv)
 
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery())
+	r.Use(gin.Logger(), logging.Recovery(logger), logging.RequestLogger(logger))
 
 	api := r.Group("/api")
 	{
@@ -32,6 +35,14 @@ func New(cfg config.Config, db *gorm.DB) *gin.Engine {
 		api.Use(auth.Middleware())
 		account.RegisterRoutes(api.Group("/accounts"), db)
 		accountsnapshot.RegisterRoutes(api.Group("/account-snapshots"), db)
+		ai.RegisterRoutes(api.Group("/ai"), db, ai.Config{
+			OpenAIAPIKey:          cfg.AI.OpenAIAPIKey,
+			OpenAIBaseURL:         cfg.AI.OpenAIBaseURL,
+			OpenAIModel:           cfg.AI.OpenAIModel,
+			RequestTimeoutSeconds: cfg.AI.RequestTimeoutSeconds,
+			UseEnvProxy:           cfg.AI.UseEnvProxy,
+			Timezone:              cfg.DB.Timezone,
+		})
 		categories.RegisterRoutes(api.Group("/categories"), db)
 		goal.RegisterRoutes(api.Group("/goals"), db)
 		investment.RegisterRoutes(api.Group("/investments"), db)

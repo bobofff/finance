@@ -42,9 +42,10 @@ export async function deleteTransaction(id: number): Promise<void> {
   await client.delete(`/transactions/${id}`);
 }
 
-export function toApiPayload(input: TransactionFormInput): CreateTransactionPayload {
+export function toApiPayload(input: TransactionFormInput, ledgerId = 1): CreateTransactionPayload {
   const amount = input.kind === 'expense' ? -Math.abs(input.amount) : Math.abs(input.amount);
   return {
+    ledger_id: ledgerId,
     occurred_on: input.occurredOn,
     account_id: input.accountId,
     category_id: input.categoryId,

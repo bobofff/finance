@@ -13,12 +13,11 @@
     <el-form-item label="父级" prop="parentId">
       <el-select
         v-model="formState.parentId"
-        placeholder="无父级"
+        placeholder="不选择则为顶级分类"
         clearable
         filterable
         @change="emitChange"
       >
-        <el-option :value="null" label="无父级" />
         <el-option v-for="option in parentOptions" :key="option.value" :label="option.label" :value="option.value" />
       </el-select>
     </el-form-item>
@@ -101,7 +100,9 @@ const handleSubmit = async () => {
 };
 
 function buildParentOptions(categories: Category[], kind: string, excludedId: number | null): ParentOption[] {
-  const filtered = categories.filter((cat) => cat.kind === kind && cat.id !== excludedId);
+  const sameKindCategories = categories.filter((cat) => cat.kind === kind);
+  const excludedIds = collectExcludedIds(sameKindCategories, excludedId);
+  const filtered = sameKindCategories.filter((cat) => !excludedIds.has(cat.id));
   if (!filtered.length) return [];
 
   const idSet = new Set(filtered.map((cat) => cat.id));
@@ -114,9 +115,9 @@ function buildParentOptions(categories: Category[], kind: string, excludedId: nu
     byParent.set(parentId, group);
   }
 
-  for (const group of byParent.values()) {
+  byParent.forEach((group) => {
     group.sort((a, b) => a.name.localeCompare(b.name));
-  }
+  });
 
   const result: ParentOption[] = [];
   const visited = new Set<number>();
@@ -140,5 +141,32 @@ function buildParentOptions(categories: Category[], kind: string, excludedId: nu
   }
 
   return result;
+}
+
+function collectExcludedIds(categories: Category[], excludedId: number | null): Set<number> {
+  const excludedIds = new Set<number>();
+  if (excludedId === null) return excludedIds;
+
+  excludedIds.add(excludedId);
+
+  const byParent = new Map<number | null, Category[]>();
+  for (const cat of categories) {
+    const group = byParent.get(cat.parentId ?? null) ?? [];
+    group.push(cat);
+    byParent.set(cat.parentId ?? null, group);
+  }
+
+  const stack = [excludedId];
+  while (stack.length) {
+    const parentId = stack.pop()!;
+    const children = byParent.get(parentId) ?? [];
+    for (const child of children) {
+      if (excludedIds.has(child.id)) continue;
+      excludedIds.add(child.id);
+      stack.push(child.id);
+    }
+  }
+
+  return excludedIds;
 }
 </script>

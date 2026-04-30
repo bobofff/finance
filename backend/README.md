@@ -15,6 +15,7 @@ Go (Gin + GORM) skeleton for the finance system. Business logic is intentionally
    ```bash
    export APP_ENV=development
    export HTTP_PORT=8888
+   export SKIP_AUTO_MIGRATE=false
    export DB_DRIVER=postgres
    export DB_HOST=127.0.0.1
    export DB_PORT=5432
@@ -31,6 +32,14 @@ Go (Gin + GORM) skeleton for the finance system. Business logic is intentionally
    ```bash
    curl http://localhost:8888/api/health
    ```
+
+If your database schema has already been initialized from `.sql` and startup reports `relation "... " already exists`, set `SKIP_AUTO_MIGRATE=true` before starting the server.
+
+## 日志
+- 默认日志目录：项目根目录下的 `logs/`
+- 按天切分文件：`finance-backend-YYYY-MM-DD.log`
+- 日志同时输出到标准输出和按天日志文件，便于本地开发与部署排查
+- 可通过 `.env` 中的 `LOG_DIR` 覆盖默认目录
 
 ## 思路与需求
 - 目标：记录期初资金与按日收支；任意时点可查询资产/负债总额；支持按时间段分析消费。
@@ -74,3 +83,12 @@ Go (Gin + GORM) skeleton for the finance system. Business logic is intentionally
   ```bash
   air
   ```
+
+## AI 记账
+- Set `OPENAI_API_KEY` in `.env` before using `POST /api/ai/parse-transaction`.
+- Optional overrides:
+  - `OPENAI_BASE_URL=https://api.openai.com/v1`
+  - `OPENAI_MODEL=gpt-5-mini`
+  - `AI_TIMEOUT_SECONDS=30`
+  - `AI_USE_ENV_PROXY=true` (`false` 可忽略系统里的 `http_proxy/https_proxy/all_proxy`)
+- The AI endpoint only returns a draft. Final write still goes through the existing `POST /api/transactions` flow.

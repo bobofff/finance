@@ -1,7 +1,0 @@
-./account.go
-./account_snapshot.go
-./annual_asset_goal.go
-./categories.go
-./investment.go
-./strategy.go
-./transaction.go

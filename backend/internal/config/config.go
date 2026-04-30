@@ -6,14 +6,18 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 )
 
 type Config struct {
-	AppEnv   string
-	HTTPPort string
-	DB       DBConfig
+	AppEnv          string
+	HTTPPort        string
+	SkipAutoMigrate bool
+	DB              DBConfig
+	AI              AIConfig
+	Log             LogConfig
 }
 
 type DBConfig struct {
@@ -27,12 +31,25 @@ type DBConfig struct {
 	Timezone string
 }
 
+type AIConfig struct {
+	OpenAIAPIKey          string
+	OpenAIBaseURL         string
+	OpenAIModel           string
+	RequestTimeoutSeconds int
+	UseEnvProxy           bool
+}
+
+type LogConfig struct {
+	Dir string
+}
+
 func Load() Config {
 	loadDotEnv()
 
 	return Config{
-		AppEnv:   getenv("APP_ENV", "development"),
-		HTTPPort: getenv("HTTP_PORT", "8888"),
+		AppEnv:          getenv("APP_ENV", "development"),
+		HTTPPort:        getenv("HTTP_PORT", "8888"),
+		SkipAutoMigrate: getenvBool("SKIP_AUTO_MIGRATE", false),
 		DB: DBConfig{
 			Driver:   getenv("DB_DRIVER", "postgres"), // postgres | mysql
 			Host:     getenv("DB_HOST", "127.0.0.1"),
@@ -42,6 +59,16 @@ func Load() Config {
 			Name:     getenv("DB_NAME", "finance"),
 			SSLMode:  getenv("DB_SSLMODE", "disable"),
 			Timezone: getenv("DB_TIMEZONE", "Asia/Shanghai"),
+		},
+		AI: AIConfig{
+			OpenAIAPIKey:          getenv("OPENAI_API_KEY", ""),
+			OpenAIBaseURL:         getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+			OpenAIModel:           getenv("OPENAI_MODEL", "gpt-5-mini"),
+			RequestTimeoutSeconds: getenvInt("AI_TIMEOUT_SECONDS", 30),
+			UseEnvProxy:           getenvBool("AI_USE_ENV_PROXY", true),
+		},
+		Log: LogConfig{
+			Dir: getenv("LOG_DIR", filepath.Join(moduleRoot(), "logs")),
 		},
 	}
 }
@@ -70,17 +97,28 @@ func loadDotEnv() {
 func candidateEnvPaths() []string {
 	paths := []string{".env", "deploy/.env"}
 
-	_, filename, _, ok := runtime.Caller(0)
-	if ok {
-		// config.go lives in internal/config; climb to module root.
-		moduleRoot := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", ".."))
-		if moduleRoot != "." {
-			paths = append(paths, filepath.Join(moduleRoot, ".env"))
-			paths = append(paths, filepath.Join(moduleRoot, "deploy", ".env"))
-		}
+	root := moduleRoot()
+	if root != "." {
+		paths = append(paths, filepath.Join(root, ".env"))
+		paths = append(paths, filepath.Join(root, "deploy", ".env"))
 	}
 
 	return paths
+}
+
+func moduleRoot() string {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		return "."
+	}
+
+	// config.go lives in internal/config; climb to module root.
+	root := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", ".."))
+	if root == "" {
+		return "."
+	}
+
+	return root
 }
 
 func applyEnvFile(path string) error {
@@ -122,4 +160,24 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func getenvInt(key string, def int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return def
+}
+
+func getenvBool(key string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
 }

@@ -1,6 +1,0 @@
-./account.go
-./account_snapshot.go
-./categories.go
-./investment.go
-./strategy.go
-./transaction.go
