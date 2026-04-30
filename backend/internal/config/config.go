@@ -112,8 +112,8 @@ func moduleRoot() string {
 		return "."
 	}
 
-	// config.go lives in internal/config; climb to module root.
-	root := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", ".."))
+	// config.go lives in internal/config; climb to the backend module root.
+	root := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
 	if root == "" {
 		return "."
 	}

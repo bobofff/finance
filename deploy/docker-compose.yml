@@ -19,6 +19,7 @@ services:
       DB_NAME: "${DB_NAME}"
       DB_SSLMODE: "${DB_SSLMODE}"
       DB_TIMEZONE: "${DB_TIMEZONE}"
+      LOG_DIR: "${LOG_DIR:-/app/logs}"
       AUTH_USERNAME: "${AUTH_USERNAME}"
       AUTH_PASSWORD_HASH: "${AUTH_PASSWORD_HASH}"
       AUTH_JWT_SECRET: "${AUTH_JWT_SECRET}"

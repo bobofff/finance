@@ -1,0 +1,27 @@
+.git
+.gitignore
+.DS_Store
+
+# Local dependencies and build output
+**/node_modules
+**/dist
+**/.vite
+
+# Local caches
+backend/.gocache
+.gocache
+
+# Runtime logs and local env files
+logs
+backend/logs
+deploy/logs
+*.log
+.env
+backend/.env
+deploy/.env
+
+# Local archives/backups should not be sent to the Docker daemon.
+*.zip
+*.tar
+*.tar.gz
+*.tgz
