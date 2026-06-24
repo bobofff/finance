@@ -17,6 +17,7 @@ type Config struct {
 	SkipAutoMigrate bool
 	DB              DBConfig
 	AI              AIConfig
+	Football        FootballConfig
 	Log             LogConfig
 }
 
@@ -32,11 +33,19 @@ type DBConfig struct {
 }
 
 type AIConfig struct {
-	OpenAIAPIKey          string
-	OpenAIBaseURL         string
-	OpenAIModel           string
+	DeepSeekAPIKey        string
+	DeepSeekBaseURL       string
+	DeepSeekModel         string
 	RequestTimeoutSeconds int
 	UseEnvProxy           bool
+}
+
+type FootballConfig struct {
+	APIKey      string
+	BaseURL     string
+	LeagueID    int
+	Season      int
+	UseEnvProxy bool
 }
 
 type LogConfig struct {
@@ -61,11 +70,18 @@ func Load() Config {
 			Timezone: getenv("DB_TIMEZONE", "Asia/Shanghai"),
 		},
 		AI: AIConfig{
-			OpenAIAPIKey:          getenv("OPENAI_API_KEY", ""),
-			OpenAIBaseURL:         getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-			OpenAIModel:           getenv("OPENAI_MODEL", "gpt-5-mini"),
-			RequestTimeoutSeconds: getenvInt("AI_TIMEOUT_SECONDS", 30),
+			DeepSeekAPIKey:        getenv("DEEPSEEK_API_KEY", ""),
+			DeepSeekBaseURL:       getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+			DeepSeekModel:         getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+			RequestTimeoutSeconds: getenvInt("AI_TIMEOUT_SECONDS", 60),
 			UseEnvProxy:           getenvBool("AI_USE_ENV_PROXY", true),
+		},
+		Football: FootballConfig{
+			APIKey:      getenv("FOOTBALL_API_KEY", ""),
+			BaseURL:     strings.TrimRight(getenv("FOOTBALL_API_BASE_URL", "https://v3.football.api-sports.io"), "/"),
+			LeagueID:    getenvInt("FOOTBALL_WORLD_CUP_LEAGUE_ID", 1),
+			Season:      getenvInt("FOOTBALL_WORLD_CUP_SEASON", 2026),
+			UseEnvProxy: getenvBool("FOOTBALL_USE_ENV_PROXY", true),
 		},
 		Log: LogConfig{
 			Dir: getenv("LOG_DIR", filepath.Join(moduleRoot(), "logs")),

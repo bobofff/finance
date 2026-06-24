@@ -85,10 +85,10 @@ If your database schema has already been initialized from `.sql` and startup rep
   ```
 
 ## AI 记账
-- Set `OPENAI_API_KEY` in `.env` before using `POST /api/ai/parse-transaction`.
+- Set `DEEPSEEK_API_KEY` in `.env` before using `POST /api/ai/parse-transaction`.
 - Optional overrides:
-  - `OPENAI_BASE_URL=https://api.openai.com/v1`
-  - `OPENAI_MODEL=gpt-5-mini`
-  - `AI_TIMEOUT_SECONDS=30`
+  - `DEEPSEEK_BASE_URL=https://api.deepseek.com`
+  - `DEEPSEEK_MODEL=deepseek-v4-flash`
+  - `AI_TIMEOUT_SECONDS=60`
   - `AI_USE_ENV_PROXY=true` (`false` 可忽略系统里的 `http_proxy/https_proxy/all_proxy`)
 - The AI endpoint only returns a draft. Final write still goes through the existing `POST /api/transactions` flow.

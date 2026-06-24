@@ -50,8 +50,8 @@
             :icon="isSidebarCollapsed ? Expand : Fold"
             @click="toggleSidebar"
           />
-          <div class="topbar-title">财务总览</div>
-          <div class="topbar-subtitle">Accounts · Transactions · Insights</div>
+          <div class="topbar-title">{{ activeMenuLabel }}</div>
+          <div class="topbar-subtitle">{{ activeMenuSubtitle }}</div>
         </div>
         <div class="topbar-actions">
           <el-tooltip :content="isDarkTheme ? '切换到浅色模式' : '切换到暗黑模式'" placement="bottom">
@@ -71,7 +71,8 @@
               !isAuthed ||
               activeMenu === 'investments' ||
               activeMenu === 'transactions' ||
-              activeMenu === 'snapshots'
+              activeMenu === 'snapshots' ||
+              activeMenu === 'world-cup'
           }"
         >
           <component :is="activeView" :key="activeMenu" @success="handleLoginSuccess" />
@@ -102,6 +103,7 @@ import {
   Fold,
   Moon,
   Setting,
+  Soccer,
   Sunny,
   Tickets,
   TrendCharts,
@@ -115,6 +117,7 @@ import InvestmentPage from './views/InvestmentPage.vue';
 import BalanceSheetPage from './views/BalanceSheetPage.vue';
 import TransactionPage from './views/TransactionPage.vue';
 import AnnualGoalPage from './views/AnnualGoalPage.vue';
+import WorldCupPage from './views/WorldCupPage.vue';
 import LoginPage from './views/LoginPage.vue';
 import { authStorage } from '@/api/client';
 import { logout } from '@/api/auth';
@@ -135,6 +138,7 @@ const menuItems: MenuItem[] = [
   { key: 'categories', label: '分类', icon: Collection },
   { key: 'investments', label: '投资', icon: TrendCharts },
   { key: 'transactions', label: '交易', icon: Tickets },
+  { key: 'world-cup', label: '世界杯', icon: Soccer },
   { key: 'settings', label: '设置', icon: Setting, disabled: true }
 ];
 
@@ -148,6 +152,11 @@ const SIDEBAR_COLLAPSE_KEY = 'finance.sidebarCollapsed';
 const isSidebarCollapsed = ref(localStorage.getItem(SIDEBAR_COLLAPSE_KEY) === '1');
 const themeMode = ref<'light' | 'dark'>(resolveInitialTheme());
 const isDarkTheme = computed(() => themeMode.value === 'dark');
+const activeMenuItem = computed(() => menuItems.find((item) => item.key === activeMenu.value));
+const activeMenuLabel = computed(() => activeMenuItem.value?.label || '财务总览');
+const activeMenuSubtitle = computed(() =>
+  activeMenu.value === 'world-cup' ? 'Groups · Standings · Fixtures' : 'Accounts · Transactions · Insights'
+);
 const activeView = computed(() => {
   if (!isAuthed.value) {
     return LoginPage;
@@ -165,6 +174,8 @@ const activeView = computed(() => {
       return InvestmentPage;
     case 'transactions':
       return TransactionPage;
+    case 'world-cup':
+      return WorldCupPage;
     default:
       return AccountPage;
   }

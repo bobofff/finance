@@ -16,6 +16,7 @@ import (
 	"finance-backend/internal/handler/report"
 	"finance-backend/internal/handler/transaction"
 	"finance-backend/internal/handler/transfer"
+	"finance-backend/internal/handler/worldcup"
 	"finance-backend/internal/logging"
 
 	"github.com/gin-gonic/gin"
@@ -36,9 +37,9 @@ func New(cfg config.Config, db *gorm.DB, logger *slog.Logger) *gin.Engine {
 		account.RegisterRoutes(api.Group("/accounts"), db)
 		accountsnapshot.RegisterRoutes(api.Group("/account-snapshots"), db)
 		ai.RegisterRoutes(api.Group("/ai"), db, ai.Config{
-			OpenAIAPIKey:          cfg.AI.OpenAIAPIKey,
-			OpenAIBaseURL:         cfg.AI.OpenAIBaseURL,
-			OpenAIModel:           cfg.AI.OpenAIModel,
+			DeepSeekAPIKey:        cfg.AI.DeepSeekAPIKey,
+			DeepSeekBaseURL:       cfg.AI.DeepSeekBaseURL,
+			DeepSeekModel:         cfg.AI.DeepSeekModel,
 			RequestTimeoutSeconds: cfg.AI.RequestTimeoutSeconds,
 			UseEnvProxy:           cfg.AI.UseEnvProxy,
 			Timezone:              cfg.DB.Timezone,
@@ -49,6 +50,13 @@ func New(cfg config.Config, db *gorm.DB, logger *slog.Logger) *gin.Engine {
 		transfer.RegisterRoutes(api.Group("/transfers"), db)
 		transaction.RegisterRoutes(api.Group("/transactions"), db)
 		report.RegisterRoutes(api.Group("/reports"), db)
+		worldcup.RegisterRoutes(api.Group("/world-cup"), worldcup.Config{
+			APIKey:          cfg.Football.APIKey,
+			BaseURL:         cfg.Football.BaseURL,
+			LeagueID:        cfg.Football.LeagueID,
+			Season:          cfg.Football.Season,
+			DisableEnvProxy: !cfg.Football.UseEnvProxy,
+		})
 	}
 
 	return r

@@ -27,10 +27,12 @@ const (
 	modelRetryBackoff    = 250 * time.Millisecond
 )
 
+var defaultAccountAliases = []string{"平安银行", "平安"}
+
 type Config struct {
-	OpenAIAPIKey          string
-	OpenAIBaseURL         string
-	OpenAIModel           string
+	DeepSeekAPIKey        string
+	DeepSeekBaseURL       string
+	DeepSeekModel         string
 	RequestTimeoutSeconds int
 	UseEnvProxy           bool
 	Timezone              string
@@ -92,12 +94,16 @@ type categoryOption struct {
 	Label string `json:"label"`
 }
 
+type promptOption struct {
+	Label string `json:"label"`
+}
+
 type aiPromptPayload struct {
-	SourceText        string           `json:"source_text"`
-	Today             string           `json:"today"`
-	Timezone          string           `json:"timezone"`
-	AvailableAccounts []accountOption  `json:"available_accounts"`
-	AvailableCats     []categoryOption `json:"available_categories"`
+	SourceText        string         `json:"source_text"`
+	Today             string         `json:"today"`
+	Timezone          string         `json:"timezone"`
+	AvailableAccounts []promptOption `json:"available_accounts"`
+	AvailableCats     []promptOption `json:"available_categories"`
 }
 
 type modelTransactionDraft struct {
@@ -108,6 +114,7 @@ type modelTransactionDraft struct {
 	Amount                float64 `json:"amount"`
 	Description           string  `json:"description"`
 	Note                  string  `json:"note"`
+	Confidence            float64 `json:"confidence"`
 	KindConfidence        float64 `json:"kind_confidence"`
 	OccurredOnConfidence  float64 `json:"occurred_on_confidence"`
 	AccountConfidence     float64 `json:"account_confidence"`
@@ -117,59 +124,57 @@ type modelTransactionDraft struct {
 	NoteConfidence        float64 `json:"note_confidence"`
 }
 
-type openAIChatCompletionRequest struct {
-	Model          string                `json:"model"`
-	Messages       []openAIChatMessage   `json:"messages"`
-	Temperature    float64               `json:"temperature"`
-	ResponseFormat *openAIResponseFormat `json:"response_format,omitempty"`
+type deepSeekChatCompletionRequest struct {
+	Model          string                  `json:"model"`
+	Messages       []deepSeekChatMessage   `json:"messages"`
+	Temperature    float64                 `json:"temperature"`
+	ResponseFormat *deepSeekResponseFormat `json:"response_format,omitempty"`
+	Thinking       *deepSeekThinking       `json:"thinking,omitempty"`
 }
 
-type openAIChatMessage struct {
+type deepSeekChatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-type openAIResponseFormat struct {
-	Type       string               `json:"type"`
-	JSONSchema openAIResponseSchema `json:"json_schema"`
+type deepSeekResponseFormat struct {
+	Type string `json:"type"`
 }
 
-type openAIResponseSchema struct {
-	Name   string         `json:"name"`
-	Strict bool           `json:"strict"`
-	Schema map[string]any `json:"schema"`
+type deepSeekThinking struct {
+	Type string `json:"type"`
 }
 
-type openAIChatCompletionResponse struct {
+type deepSeekChatCompletionResponse struct {
 	Choices []struct {
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
-	Usage *openAIUsage         `json:"usage,omitempty"`
-	Error *openAIErrorResponse `json:"error,omitempty"`
+	Usage *deepSeekUsage         `json:"usage,omitempty"`
+	Error *deepSeekErrorResponse `json:"error,omitempty"`
 }
 
-type openAIErrorResponse struct {
+type deepSeekErrorResponse struct {
 	Message string `json:"message"`
 	Type    string `json:"type"`
 	Code    any    `json:"code"`
 }
 
-type openAIUsage struct {
-	PromptTokens            int                            `json:"prompt_tokens"`
-	CompletionTokens        int                            `json:"completion_tokens"`
-	TotalTokens             int                            `json:"total_tokens"`
-	PromptTokensDetails     *openAIPromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
-	CompletionTokensDetails *openAICompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+type deepSeekUsage struct {
+	PromptTokens            int                              `json:"prompt_tokens"`
+	CompletionTokens        int                              `json:"completion_tokens"`
+	TotalTokens             int                              `json:"total_tokens"`
+	PromptTokensDetails     *deepSeekPromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *deepSeekCompletionTokensDetails `json:"completion_tokens_details,omitempty"`
 }
 
-type openAIPromptTokensDetails struct {
+type deepSeekPromptTokensDetails struct {
 	CachedTokens int `json:"cached_tokens,omitempty"`
 	AudioTokens  int `json:"audio_tokens,omitempty"`
 }
 
-type openAICompletionTokensDetails struct {
+type deepSeekCompletionTokensDetails struct {
 	ReasoningTokens          int `json:"reasoning_tokens,omitempty"`
 	AudioTokens              int `json:"audio_tokens,omitempty"`
 	AcceptedPredictionTokens int `json:"accepted_prediction_tokens,omitempty"`
@@ -207,8 +212,8 @@ func (h *Handler) parseTransaction(c *gin.Context) {
 		SourceText:        text,
 		Today:             now.Format("2006-01-02"),
 		Timezone:          location.String(),
-		AvailableAccounts: accounts,
-		AvailableCats:     categories,
+		AvailableAccounts: accountPromptOptions(accounts),
+		AvailableCats:     categoryPromptOptions(categories),
 	}
 
 	rawDraft, err := h.callModel(c.Request.Context(), logging.FromContext(c), payload)
@@ -248,8 +253,9 @@ func (h *Handler) finalizeDraft(raw modelTransactionDraft, accounts []accountOpt
 	}
 
 	accountByLabel, accountByName := buildAccountIndexes(accounts)
-	categoryByLabel, categoryByName := buildCategoryIndexes(categories)
+	categoryByLabel, categoryByPath, categoryByName := buildCategoryIndexes(categories)
 
+	accountDefaulted := false
 	if draft.AccountName != "" {
 		if account, ok := accountByLabel[normalizeKey(draft.AccountName)]; ok {
 			id := account.ID
@@ -258,11 +264,29 @@ func (h *Handler) finalizeDraft(raw modelTransactionDraft, accounts []accountOpt
 			id := account.ID
 			draft.AccountID = &id
 			draft.AccountName = account.Name
+		} else if isDefaultAccountAlias(draft.AccountName) {
+			if account, ok := defaultAccount(accounts); ok {
+				id := account.ID
+				draft.AccountID = &id
+				draft.AccountName = account.Name
+			}
+		}
+	}
+	if draft.AccountID == nil && draft.AccountName == "" {
+		if account, ok := defaultAccount(accounts); ok {
+			id := account.ID
+			draft.AccountID = &id
+			draft.AccountName = account.Name
+			accountDefaulted = true
 		}
 	}
 
 	if draft.CategoryName != "" {
 		if category, ok := categoryByLabel[normalizeKey(draft.CategoryName)]; ok {
+			id := category.ID
+			draft.CategoryID = &id
+			draft.CategoryName = category.Label
+		} else if category, ok := categoryByPath[normalizeKey(draft.CategoryName)]; ok {
 			id := category.ID
 			draft.CategoryID = &id
 			draft.CategoryName = category.Label
@@ -316,25 +340,25 @@ func (h *Handler) finalizeDraft(raw modelTransactionDraft, accounts []accountOpt
 		draft.MissingFields = append(draft.MissingFields, "amount")
 	}
 
-	if raw.KindConfidence < confidenceThreshold {
+	if effectiveConfidence(raw.KindConfidence, raw.Confidence) < confidenceThreshold {
 		draft.LowConfidenceFields = append(draft.LowConfidenceFields, "kind")
 	}
-	if raw.OccurredOnConfidence < confidenceThreshold {
+	if effectiveConfidence(raw.OccurredOnConfidence, raw.Confidence) < confidenceThreshold {
 		draft.LowConfidenceFields = append(draft.LowConfidenceFields, "occurred_on")
 	}
-	if raw.AccountConfidence < confidenceThreshold {
+	if !accountDefaulted && effectiveConfidence(raw.AccountConfidence, raw.Confidence) < confidenceThreshold {
 		draft.LowConfidenceFields = append(draft.LowConfidenceFields, "account")
 	}
-	if raw.CategoryConfidence < confidenceThreshold {
+	if effectiveConfidence(raw.CategoryConfidence, raw.Confidence) < confidenceThreshold {
 		draft.LowConfidenceFields = append(draft.LowConfidenceFields, "category")
 	}
-	if raw.AmountConfidence < confidenceThreshold {
+	if effectiveConfidence(raw.AmountConfidence, raw.Confidence) < confidenceThreshold {
 		draft.LowConfidenceFields = append(draft.LowConfidenceFields, "amount")
 	}
-	if raw.DescriptionConfidence < confidenceThreshold {
+	if effectiveConfidence(raw.DescriptionConfidence, raw.Confidence) < confidenceThreshold {
 		draft.LowConfidenceFields = append(draft.LowConfidenceFields, "description")
 	}
-	if raw.NoteConfidence < confidenceThreshold {
+	if effectiveConfidence(raw.NoteConfidence, raw.Confidence) < confidenceThreshold {
 		draft.LowConfidenceFields = append(draft.LowConfidenceFields, "note")
 	}
 
@@ -345,7 +369,7 @@ func (h *Handler) finalizeDraft(raw modelTransactionDraft, accounts []accountOpt
 }
 
 func (h *Handler) callModel(ctx context.Context, logger *slog.Logger, payload aiPromptPayload) (modelTransactionDraft, error) {
-	if strings.TrimSpace(h.config.OpenAIAPIKey) == "" {
+	if strings.TrimSpace(h.config.DeepSeekAPIKey) == "" {
 		return modelTransactionDraft{}, errAIUnavailable
 	}
 
@@ -359,31 +383,30 @@ func (h *Handler) callModel(ctx context.Context, logger *slog.Logger, payload ai
 你的任务是把用户的一句话转换成结构化草稿，供人工确认后再入账。
 必须遵守以下规则：
 1. 只输出 JSON，不要输出任何解释、代码块或多余文字。
-2. kind 只能是 income 或 expense。
-3. amount 必须是正数，表示绝对金额，不要带正负号。
-4. account_name 和 category_name 必须从候选列表的 label 中选择，不能自己编造；找不到就留空字符串。
-5. occurred_on 必须输出 YYYY-MM-DD 格式的绝对日期；“今天”“昨天”等相对日期要按当前日期换算。
-6. description 只保留简短摘要，例如“煎饼果子”“工资”。
-7. note 只保留对记账有帮助的补充信息；没有就留空。
-8. 字段不确定时就留空，并通过 confidence 降低置信度。
+2. JSON 必须包含这些字段：kind、occurred_on、account_name、category_name、amount、description、note、confidence、kind_confidence、occurred_on_confidence、account_confidence、category_confidence、amount_confidence、description_confidence、note_confidence。
+3. kind 只能是 income 或 expense。
+4. amount 必须是正数，表示绝对金额，不要带正负号。
+5. account_name 和 category_name 必须从候选列表的 label 中选择，不能自己编造；如果没有明确账户，优先选择候选中的“平安银行”或“平安”；找不到就留空字符串。
+6. occurred_on 必须输出 YYYY-MM-DD 格式的绝对日期；“今天”“昨天”等相对日期要按当前日期换算。
+7. description 只保留简短摘要，例如“煎饼果子”“工资”。
+8. note 只保留对记账有帮助的补充信息；没有就留空。
+9. confidence 和各 *_confidence 字段必须输出 0 到 1 之间的数字；字段不确定时就留空，并降低对应字段置信度。
 `)
 
 	userPrompt := fmt.Sprintf("请根据下面的 JSON 输入，输出结构化记账草稿：\n%s", string(promptBody))
 
-	requestBody := openAIChatCompletionRequest{
+	requestBody := deepSeekChatCompletionRequest{
 		Model: h.model(),
-		Messages: []openAIChatMessage{
+		Messages: []deepSeekChatMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
 		Temperature: 0,
-		ResponseFormat: &openAIResponseFormat{
-			Type: "json_schema",
-			JSONSchema: openAIResponseSchema{
-				Name:   "parse_transaction",
-				Strict: true,
-				Schema: transactionDraftSchema(),
-			},
+		ResponseFormat: &deepSeekResponseFormat{
+			Type: "json_object",
+		},
+		Thinking: &deepSeekThinking{
+			Type: "disabled",
 		},
 	}
 
@@ -448,7 +471,7 @@ func (h *Handler) logModelInteraction(
 	responseBody string,
 	statusCode int,
 	latency time.Duration,
-	usage *openAIUsage,
+	usage *deepSeekUsage,
 	callErr error,
 ) {
 	if logger == nil {
@@ -456,7 +479,7 @@ func (h *Handler) logModelInteraction(
 	}
 
 	attrs := []any{
-		slog.String("provider", "openai"),
+		slog.String("provider", "deepseek"),
 		slog.String("operation", "parse_transaction"),
 		slog.String("model", strings.TrimSpace(model)),
 		slog.String("endpoint", endpoint),
@@ -572,6 +595,26 @@ func buildCategoryPath(category model.Category, byID map[int]model.Category) str
 	return strings.Join(filtered, " / ")
 }
 
+func accountPromptOptions(accounts []accountOption) []promptOption {
+	options := make([]promptOption, 0, len(accounts))
+	for _, account := range accounts {
+		if label := strings.TrimSpace(account.Label); label != "" {
+			options = append(options, promptOption{Label: label})
+		}
+	}
+	return options
+}
+
+func categoryPromptOptions(categories []categoryOption) []promptOption {
+	options := make([]promptOption, 0, len(categories))
+	for _, category := range categories {
+		if label := strings.TrimSpace(category.Label); label != "" {
+			options = append(options, promptOption{Label: label})
+		}
+	}
+	return options
+}
+
 func buildAccountIndexes(accounts []accountOption) (map[string]accountOption, map[string][]accountOption) {
 	byLabel := make(map[string]accountOption, len(accounts))
 	byName := make(map[string][]accountOption, len(accounts))
@@ -582,14 +625,18 @@ func buildAccountIndexes(accounts []accountOption) (map[string]accountOption, ma
 	return byLabel, byName
 }
 
-func buildCategoryIndexes(categories []categoryOption) (map[string]categoryOption, map[string][]categoryOption) {
+func buildCategoryIndexes(categories []categoryOption) (map[string]categoryOption, map[string]categoryOption, map[string][]categoryOption) {
 	byLabel := make(map[string]categoryOption, len(categories))
+	byPath := make(map[string]categoryOption, len(categories))
 	byName := make(map[string][]categoryOption, len(categories))
 	for _, category := range categories {
 		byLabel[normalizeKey(category.Label)] = category
+		if pathKey := normalizeKey(category.Path); pathKey != "" {
+			byPath[pathKey] = category
+		}
 		byName[normalizeKey(category.Name)] = append(byName[normalizeKey(category.Name)], category)
 	}
-	return byLabel, byName
+	return byLabel, byPath, byName
 }
 
 func uniqueAccountByName(index map[string][]accountOption, name string) (accountOption, bool) {
@@ -598,6 +645,34 @@ func uniqueAccountByName(index map[string][]accountOption, name string) (account
 		return accountOption{}, false
 	}
 	return items[0], true
+}
+
+func defaultAccount(accounts []accountOption) (accountOption, bool) {
+	for _, alias := range defaultAccountAliases {
+		for _, account := range accounts {
+			if normalizeAccountAlias(account.Name) == normalizeAccountAlias(alias) {
+				return account, true
+			}
+		}
+	}
+	return accountOption{}, false
+}
+
+func isDefaultAccountAlias(name string) bool {
+	for _, alias := range defaultAccountAliases {
+		if normalizeAccountAlias(name) == normalizeAccountAlias(alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeAccountAlias(value string) string {
+	key := normalizeKey(value)
+	if index := strings.Index(key, "["); index >= 0 {
+		key = strings.TrimSpace(key[:index])
+	}
+	return normalizeKey(key)
 }
 
 func uniqueCategoryByName(index map[string][]categoryOption, name string) (categoryOption, bool) {
@@ -632,6 +707,13 @@ func normalizeKey(value string) string {
 	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(value)), " "))
 }
 
+func effectiveConfidence(fieldConfidence float64, fallbackConfidence float64) float64 {
+	if fieldConfidence > 0 {
+		return fieldConfidence
+	}
+	return fallbackConfidence
+}
+
 func uniqueSortedStrings(values []string) []string {
 	if len(values) == 0 {
 		return []string{}
@@ -655,16 +737,16 @@ func uniqueSortedStrings(values []string) []string {
 }
 
 func (h *Handler) model() string {
-	if strings.TrimSpace(h.config.OpenAIModel) != "" {
-		return strings.TrimSpace(h.config.OpenAIModel)
+	if strings.TrimSpace(h.config.DeepSeekModel) != "" {
+		return strings.TrimSpace(h.config.DeepSeekModel)
 	}
-	return "gpt-5-mini"
+	return "deepseek-v4-flash"
 }
 
 func (h *Handler) baseURL() string {
-	baseURL := strings.TrimSpace(h.config.OpenAIBaseURL)
+	baseURL := strings.TrimSpace(h.config.DeepSeekBaseURL)
 	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
+		baseURL = "https://api.deepseek.com"
 	}
 	return strings.TrimRight(baseURL, "/")
 }
@@ -680,7 +762,7 @@ func (h *Handler) timeLocation() *time.Location {
 
 func timeoutFromConfig(seconds int) time.Duration {
 	if seconds <= 0 {
-		seconds = 30
+		seconds = 60
 	}
 	return time.Duration(seconds) * time.Second
 }
@@ -723,80 +805,12 @@ func truncateForLog(value string, maxRunes int) string {
 	return string(runes[:maxRunes]) + "...(truncated)"
 }
 
-func transactionDraftSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"properties": map[string]any{
-			"kind": map[string]any{
-				"type": "string",
-				"enum": []string{"income", "expense"},
-			},
-			"occurred_on": map[string]any{
-				"type": "string",
-			},
-			"account_name": map[string]any{
-				"type": "string",
-			},
-			"category_name": map[string]any{
-				"type": "string",
-			},
-			"amount": map[string]any{
-				"type": "number",
-			},
-			"description": map[string]any{
-				"type": "string",
-			},
-			"note": map[string]any{
-				"type": "string",
-			},
-			"kind_confidence": map[string]any{
-				"type": "number",
-			},
-			"occurred_on_confidence": map[string]any{
-				"type": "number",
-			},
-			"account_confidence": map[string]any{
-				"type": "number",
-			},
-			"category_confidence": map[string]any{
-				"type": "number",
-			},
-			"amount_confidence": map[string]any{
-				"type": "number",
-			},
-			"description_confidence": map[string]any{
-				"type": "number",
-			},
-			"note_confidence": map[string]any{
-				"type": "number",
-			},
-		},
-		"required": []string{
-			"kind",
-			"occurred_on",
-			"account_name",
-			"category_name",
-			"amount",
-			"description",
-			"note",
-			"kind_confidence",
-			"occurred_on_confidence",
-			"account_confidence",
-			"category_confidence",
-			"amount_confidence",
-			"description_confidence",
-			"note_confidence",
-		},
-	}
-}
-
 type modelCallResult struct {
 	Draft            modelTransactionDraft
 	StatusCode       int
 	ResponseText     string
 	ResponseBodyText string
-	Usage            *openAIUsage
+	Usage            *deepSeekUsage
 }
 
 func (h *Handler) executeModelCall(ctx context.Context, endpoint string, body []byte) (modelCallResult, error) {
@@ -804,7 +818,7 @@ func (h *Handler) executeModelCall(ctx context.Context, endpoint string, body []
 	if err != nil {
 		return modelCallResult{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(h.config.OpenAIAPIKey))
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(h.config.DeepSeekAPIKey))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := h.client.Do(req)
@@ -823,31 +837,31 @@ func (h *Handler) executeModelCall(ctx context.Context, endpoint string, body []
 	result.ResponseBodyText = strings.TrimSpace(string(responseBody))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		var openAIErr openAIChatCompletionResponse
-		if err := json.Unmarshal(responseBody, &openAIErr); err == nil && openAIErr.Error != nil {
-			if strings.TrimSpace(openAIErr.Error.Message) != "" {
-				return result, fmt.Errorf("openai api error: status=%s type=%s message=%s", resp.Status, openAIErr.Error.Type, openAIErr.Error.Message)
+		var deepSeekErr deepSeekChatCompletionResponse
+		if err := json.Unmarshal(responseBody, &deepSeekErr); err == nil && deepSeekErr.Error != nil {
+			if strings.TrimSpace(deepSeekErr.Error.Message) != "" {
+				return result, fmt.Errorf("deepseek api error: status=%s type=%s message=%s", resp.Status, deepSeekErr.Error.Type, deepSeekErr.Error.Message)
 			}
 		}
 		if snippet := strings.TrimSpace(string(responseBody)); snippet != "" {
-			return result, fmt.Errorf("openai api returned status %s: %s", resp.Status, truncateForLog(snippet, 1024))
+			return result, fmt.Errorf("deepseek api returned status %s: %s", resp.Status, truncateForLog(snippet, 1024))
 		}
-		return result, fmt.Errorf("openai api returned status %s", resp.Status)
+		return result, fmt.Errorf("deepseek api returned status %s", resp.Status)
 	}
 
-	var completion openAIChatCompletionResponse
+	var completion deepSeekChatCompletionResponse
 	if err := json.Unmarshal(responseBody, &completion); err != nil {
 		return result, err
 	}
 	result.Usage = completion.Usage
 	if len(completion.Choices) == 0 {
-		return result, errors.New("openai api returned no choices")
+		return result, errors.New("deepseek api returned no choices")
 	}
 
 	content := strings.TrimSpace(completion.Choices[0].Message.Content)
 	result.ResponseText = content
 	if content == "" {
-		return result, errors.New("openai api returned empty content")
+		return result, errors.New("deepseek api returned empty content")
 	}
 
 	if err := json.Unmarshal([]byte(content), &result.Draft); err != nil {
@@ -903,4 +917,4 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
-var errAIUnavailable = errors.New("OPENAI_API_KEY is not configured")
+var errAIUnavailable = errors.New("DEEPSEEK_API_KEY is not configured")
