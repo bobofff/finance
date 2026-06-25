@@ -23,16 +23,25 @@ import (
 )
 
 const (
-	competitionName   = "2026 FIFA World Cup"
-	apiFootballName   = "API-FOOTBALL"
-	apiFootballDocs   = "https://www.api-football.com/documentation-v3"
-	mediaWikiAPI      = "https://en.wikipedia.org/w/api.php"
-	cacheTTL          = 15 * time.Minute
-	requestTimeout    = 15 * time.Second
-	tournamentTimeout = 60 * time.Second
-	groupConcurrency  = 1
-	apiRetryAttempts  = 3
-	apiRetryBackoff   = 250 * time.Millisecond
+	competitionName        = "2026 FIFA World Cup"
+	footballDataName       = "football-data.org"
+	footballDataDocs       = "https://www.football-data.org/documentation/quickstart"
+	defaultBaseURL         = "https://api.football-data.org/v4"
+	defaultCompetitionCode = "WC"
+	fifaRankingName        = "FIFA World Rankings"
+	fifaRankingDocs        = "https://inside.fifa.com/fifa-world-ranking/men"
+	defaultRankingBaseURL  = "https://api.fifa.com/api/v3"
+	defaultRankingLocale   = "en-GB"
+	apiFootballName        = "API-FOOTBALL"
+	apiFootballDocs        = "https://www.api-football.com/documentation-v3"
+	mediaWikiAPI           = "https://en.wikipedia.org/w/api.php"
+	cacheTTL               = 15 * time.Minute
+	refreshCooldown        = 1 * time.Minute
+	requestTimeout         = 15 * time.Second
+	tournamentTimeout      = 60 * time.Second
+	groupConcurrency       = 1
+	apiRetryAttempts       = 3
+	apiRetryBackoff        = 250 * time.Millisecond
 )
 
 var groupKeys = []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"}
@@ -44,29 +53,51 @@ type Handler struct {
 	mu          sync.Mutex
 	cache       *TournamentResponse
 	cacheExpiry time.Time
+	lastFetchAt time.Time
+	inFlight    *tournamentFetchCall
+}
+
+type tournamentFetchCall struct {
+	done       chan struct{}
+	tournament *TournamentResponse
+	err        error
 }
 
 type Config struct {
-	APIKey          string
-	BaseURL         string
-	LeagueID        int
-	Season          int
-	DisableEnvProxy bool
+	Token             string
+	BaseURL           string
+	CompetitionCode   string
+	Season            int
+	RankingBaseURL    string
+	RankingScheduleID string
+	RankingLocale     string
+	DisableEnvProxy   bool
+
+	// Legacy API-Football fields kept only so the old parser can compile while
+	// football-data.org is the active source.
+	APIKey   string
+	LeagueID int
 }
 
 func RegisterRoutes(rg *gin.RouterGroup, cfg Config) {
 	if strings.TrimSpace(cfg.BaseURL) == "" {
-		cfg.BaseURL = "https://v3.football.api-sports.io"
+		cfg.BaseURL = defaultBaseURL
 	}
-	if cfg.LeagueID <= 0 {
-		cfg.LeagueID = 1
+	if strings.TrimSpace(cfg.CompetitionCode) == "" {
+		cfg.CompetitionCode = defaultCompetitionCode
+	}
+	if strings.TrimSpace(cfg.RankingBaseURL) == "" {
+		cfg.RankingBaseURL = defaultRankingBaseURL
+	}
+	if strings.TrimSpace(cfg.RankingLocale) == "" {
+		cfg.RankingLocale = defaultRankingLocale
 	}
 	if cfg.Season <= 0 {
 		cfg.Season = 2026
 	}
 
 	h := &Handler{
-		client: newAPIFootballHTTPClient(cfg),
+		client: newFootballDataHTTPClient(cfg),
 		cfg:    cfg,
 	}
 
@@ -84,6 +115,7 @@ type TournamentResponse struct {
 	Source       TournamentSource  `json:"source"`
 	Summary      TournamentSummary `json:"summary"`
 	Groups       []Group           `json:"groups"`
+	Knockout     []KnockoutRound   `json:"knockout_rounds"`
 }
 
 type TournamentSource struct {
@@ -95,6 +127,7 @@ type TournamentSummary struct {
 	GroupCount       int `json:"group_count"`
 	TeamCount        int `json:"team_count"`
 	MatchCount       int `json:"match_count"`
+	KnockoutMatches  int `json:"knockout_matches"`
 	FinishedMatches  int `json:"finished_matches"`
 	ScheduledMatches int `json:"scheduled_matches"`
 }
@@ -106,6 +139,12 @@ type Group struct {
 	Teams     []Team  `json:"teams"`
 	Standings []Team  `json:"standings"`
 	Matches   []Match `json:"matches"`
+}
+
+type KnockoutRound struct {
+	Key     string  `json:"key"`
+	Label   string  `json:"label"`
+	Matches []Match `json:"matches"`
 }
 
 type Team struct {
@@ -140,6 +179,8 @@ type Team struct {
 type Match struct {
 	ID            string `json:"id"`
 	Group         string `json:"group"`
+	Stage         string `json:"stage,omitempty"`
+	UTCDate       string `json:"utc_date,omitempty"`
 	Date          string `json:"date"`
 	Time          string `json:"time"`
 	HomeTeam      string `json:"home_team"`
@@ -260,6 +301,158 @@ type apiFootballFixturesResponse struct {
 	} `json:"response"`
 }
 
+type footballDataStandingsResponse struct {
+	Filters struct {
+		Season flexibleJSONValue `json:"season"`
+	} `json:"filters"`
+	Competition struct {
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+		Code string `json:"code"`
+	} `json:"competition"`
+	Season struct {
+		StartDate string `json:"startDate"`
+		EndDate   string `json:"endDate"`
+	} `json:"season"`
+	Standings []struct {
+		Stage string `json:"stage"`
+		Type  string `json:"type"`
+		Group string `json:"group"`
+		Table []struct {
+			Position       int                 `json:"position"`
+			Team           footballDataTeamDTO `json:"team"`
+			PlayedGames    int                 `json:"playedGames"`
+			Form           string              `json:"form"`
+			Won            int                 `json:"won"`
+			Draw           int                 `json:"draw"`
+			Lost           int                 `json:"lost"`
+			Points         int                 `json:"points"`
+			GoalsFor       int                 `json:"goalsFor"`
+			GoalsAgainst   int                 `json:"goalsAgainst"`
+			GoalDifference int                 `json:"goalDifference"`
+		} `json:"table"`
+	} `json:"standings"`
+}
+
+type footballDataMatchesResponse struct {
+	Filters struct {
+		Season flexibleJSONValue `json:"season"`
+	} `json:"filters"`
+	Competition struct {
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+		Code string `json:"code"`
+	} `json:"competition"`
+	Matches []footballDataMatchDTO `json:"matches"`
+}
+
+type footballDataTeamDTO struct {
+	ID        int    `json:"id"`
+	Name      string `json:"name"`
+	ShortName string `json:"shortName"`
+	TLA       string `json:"tla"`
+	Crest     string `json:"crest"`
+}
+
+type footballDataMatchDTO struct {
+	ID       int                 `json:"id"`
+	UTCDate  string              `json:"utcDate"`
+	Status   string              `json:"status"`
+	Stage    string              `json:"stage"`
+	Group    string              `json:"group"`
+	Venue    footballDataVenue   `json:"venue"`
+	HomeTeam footballDataTeamDTO `json:"homeTeam"`
+	AwayTeam footballDataTeamDTO `json:"awayTeam"`
+	Score    struct {
+		Winner   string `json:"winner"`
+		Duration string `json:"duration"`
+		FullTime struct {
+			Home *int `json:"home"`
+			Away *int `json:"away"`
+		} `json:"fullTime"`
+	} `json:"score"`
+}
+
+type fifaRankingResponse struct {
+	Results []fifaRankingEntry `json:"Results"`
+}
+
+type fifaRankingEntry struct {
+	IDTeam            string                 `json:"IdTeam"`
+	TeamName          []localizedDescription `json:"TeamName"`
+	ConfederationName string                 `json:"ConfederationName"`
+	IDCountry         string                 `json:"IdCountry"`
+	Rank              int                    `json:"Rank"`
+	TotalPoints       float64                `json:"TotalPoints"`
+}
+
+type localizedDescription struct {
+	Locale      string `json:"Locale"`
+	Description string `json:"Description"`
+}
+
+type fifaRankingIndex struct {
+	byCode map[string]fifaRankingEntry
+	byName map[string]fifaRankingEntry
+}
+
+type flexibleJSONValue string
+
+func (value *flexibleJSONValue) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		*value = ""
+		return nil
+	}
+
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		*value = flexibleJSONValue(text)
+		return nil
+	}
+
+	*value = flexibleJSONValue(trimmed)
+	return nil
+}
+
+func (value flexibleJSONValue) String() string {
+	return string(value)
+}
+
+type footballDataVenue string
+
+func (value *footballDataVenue) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		*value = ""
+		return nil
+	}
+
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		*value = footballDataVenue(strings.TrimSpace(text))
+		return nil
+	}
+
+	var object map[string]interface{}
+	if err := json.Unmarshal(data, &object); err == nil {
+		parts := nonEmptyStrings(
+			stringFromMap(object, "name"),
+			stringFromMap(object, "stadium"),
+			stringFromMap(object, "city"),
+		)
+		*value = footballDataVenue(strings.Join(parts, ", "))
+		return nil
+	}
+
+	*value = footballDataVenue(trimmed)
+	return nil
+}
+
+func (value footballDataVenue) String() string {
+	return string(value)
+}
+
 type wikiTeam struct {
 	Team
 	code string
@@ -286,6 +479,8 @@ type teamRef struct {
 	teamIndex int
 }
 
+type matchVenueIndex map[string]string
+
 func (h *Handler) getTournament(c *gin.Context) {
 	refresh := strings.EqualFold(strings.TrimSpace(c.Query("refresh")), "1")
 	tournament, err := h.loadTournament(c.Request.Context(), refresh)
@@ -306,10 +501,40 @@ func (h *Handler) loadTournament(ctx context.Context, refresh bool) (*Tournament
 		h.mu.Unlock()
 		return cached, nil
 	}
+	if refresh && h.cache != nil && !h.lastFetchAt.IsZero() && now.Sub(h.lastFetchAt) < refreshCooldown {
+		cached := cloneTournament(h.cache)
+		if now.After(h.cacheExpiry) {
+			cached.Stale = true
+			cached.Warning = "refresh skipped because upstream data was requested recently"
+		}
+		h.mu.Unlock()
+		return cached, nil
+	}
 	stale := cloneTournament(h.cache)
+	if h.inFlight != nil {
+		call := h.inFlight
+		h.mu.Unlock()
+		return h.waitForTournamentFetch(ctx, call, stale)
+	}
+	call := &tournamentFetchCall{done: make(chan struct{})}
+	h.inFlight = call
+	h.lastFetchAt = now
 	h.mu.Unlock()
 
 	tournament, err := h.fetchTournament(ctx)
+	h.mu.Lock()
+	call.tournament = cloneTournament(tournament)
+	call.err = err
+	if err == nil {
+		h.cache = cloneTournament(tournament)
+		h.cacheExpiry = time.Now().Add(cacheTTL)
+	}
+	if h.inFlight == call {
+		h.inFlight = nil
+	}
+	close(call.done)
+	h.mu.Unlock()
+
 	if err != nil {
 		if stale != nil {
 			stale.Stale = true
@@ -319,19 +544,203 @@ func (h *Handler) loadTournament(ctx context.Context, refresh bool) (*Tournament
 		return nil, err
 	}
 
-	h.mu.Lock()
-	h.cache = cloneTournament(tournament)
-	h.cacheExpiry = now.Add(cacheTTL)
-	h.mu.Unlock()
-
 	return tournament, nil
+}
+
+func (h *Handler) waitForTournamentFetch(ctx context.Context, call *tournamentFetchCall, stale *TournamentResponse) (*TournamentResponse, error) {
+	select {
+	case <-call.done:
+		h.mu.Lock()
+		tournament := cloneTournament(call.tournament)
+		err := call.err
+		h.mu.Unlock()
+		if err != nil {
+			if stale != nil {
+				stale.Stale = true
+				stale.Warning = err.Error()
+				return stale, nil
+			}
+			return nil, err
+		}
+		return tournament, nil
+	case <-ctx.Done():
+		if stale != nil {
+			stale.Stale = true
+			stale.Warning = ctx.Err().Error()
+			return stale, nil
+		}
+		return nil, ctx.Err()
+	}
 }
 
 func (h *Handler) fetchTournament(ctx context.Context) (*TournamentResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, tournamentTimeout)
 	defer cancel()
 
-	return h.fetchTournamentFromAPIFootball(ctx)
+	return h.fetchTournamentFromFootballData(ctx)
+}
+
+func (h *Handler) fetchTournamentFromFootballData(ctx context.Context) (*TournamentResponse, error) {
+	var standingsPayload footballDataStandingsResponse
+	if err := h.footballDataGet(ctx, fmt.Sprintf("/competitions/%s/standings", url.PathEscape(h.cfg.CompetitionCode)), url.Values{
+		"season": []string{strconv.Itoa(h.cfg.Season)},
+	}, &standingsPayload); err != nil {
+		return nil, err
+	}
+	if len(standingsPayload.Standings) == 0 {
+		return nil, errors.New("football-data.org returned no World Cup standings")
+	}
+
+	var matchesPayload footballDataMatchesResponse
+	if err := h.footballDataGet(ctx, fmt.Sprintf("/competitions/%s/matches", url.PathEscape(h.cfg.CompetitionCode)), url.Values{
+		"season": []string{strconv.Itoa(h.cfg.Season)},
+	}, &matchesPayload); err != nil {
+		return nil, err
+	}
+
+	var warnings []string
+	rankings, err := h.fetchFIFARankings(ctx)
+	if err != nil {
+		warnings = append(warnings, fmt.Sprintf("%s unavailable: %v", fifaRankingName, err))
+	}
+
+	var venueIndex matchVenueIndex
+	if footballDataNeedsVenueFallback(matchesPayload.Matches) {
+		if index, err := h.fetchWikiMatchVenueIndex(ctx); err == nil {
+			venueIndex = index
+		} else {
+			warnings = append(warnings, fmt.Sprintf("match venues unavailable: %v", err))
+		}
+	}
+
+	groupMap := make(map[string]*Group)
+	teamRefs := make(map[int]teamRef)
+	standingsByTeamID := make(map[int]Team)
+	for _, standing := range standingsPayload.Standings {
+		if !strings.EqualFold(standing.Type, "TOTAL") {
+			continue
+		}
+		groupKey := groupKeyFromText(standing.Group)
+		hasStandingGroup := groupKey != ""
+		for _, row := range standing.Table {
+			team := Team{
+				Code:           footballDataTeamCode(row.Team),
+				Name:           footballDataTeamName(row.Team),
+				FlagURL:        row.Team.Crest,
+				Played:         row.PlayedGames,
+				Won:            row.Won,
+				Drawn:          row.Draw,
+				Lost:           row.Lost,
+				GoalsFor:       row.GoalsFor,
+				GoalsAgainst:   row.GoalsAgainst,
+				GoalDifference: row.GoalDifference,
+				Points:         row.Points,
+			}
+			if hasStandingGroup {
+				team.GroupRank = row.Position
+				group := ensureFootballDataGroup(groupMap, groupKey, standing.Group)
+				group.Teams = append(group.Teams, team)
+				teamRefs[row.Team.ID] = teamRef{groupKey: groupKey, teamIndex: len(group.Teams) - 1}
+			}
+			standingsByTeamID[row.Team.ID] = team
+		}
+	}
+
+	knockoutMatches := make([]Match, 0)
+	for _, fixture := range matchesPayload.Matches {
+		if !isFootballDataGroupStage(fixture.Stage) {
+			if isFootballDataKnockoutStage(fixture.Stage) {
+				match := footballDataMatchToMatch(knockoutStageKey(fixture.Stage), fixture)
+				knockoutMatches = append(knockoutMatches, match)
+			}
+			continue
+		}
+		groupKey := groupKeyFromText(fixture.Group)
+		if groupKey == "" {
+			groupKey = groupKeyForFixture(fixture.Group, fixture.HomeTeam.ID, fixture.AwayTeam.ID, teamRefs)
+		}
+		if groupKey == "" {
+			continue
+		}
+		group := ensureFootballDataGroup(groupMap, groupKey, fixture.Group)
+		homeRef := ensureFootballDataTeamInGroup(group, teamRefs, standingsByTeamID, fixture.HomeTeam, groupKey)
+		awayRef := ensureFootballDataTeamInGroup(group, teamRefs, standingsByTeamID, fixture.AwayTeam, groupKey)
+		match := footballDataMatchToMatch(groupKey, fixture)
+		if match.Venue == "" {
+			match.Venue = venueIndex.find(match)
+		}
+		group.Matches = append(group.Matches, match)
+		group.Teams[homeRef.teamIndex].Schedule = append(group.Teams[homeRef.teamIndex].Schedule, match)
+		group.Teams[awayRef.teamIndex].Schedule = append(group.Teams[awayRef.teamIndex].Schedule, match)
+	}
+
+	groups := make([]Group, 0, len(groupMap))
+	for _, group := range groupMap {
+		sortFootballDataTeams(group.Teams)
+		if rankings != nil {
+			applyFIFARankings(group.Teams, rankings)
+		}
+		group.Standings = append([]Team(nil), group.Teams...)
+		sort.SliceStable(group.Matches, func(i, j int) bool {
+			if group.Matches[i].Date == group.Matches[j].Date {
+				return group.Matches[i].Time < group.Matches[j].Time
+			}
+			return group.Matches[i].Date < group.Matches[j].Date
+		})
+		groups = append(groups, *group)
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		return groups[i].Key < groups[j].Key
+	})
+	knockoutRounds := buildKnockoutRounds(knockoutMatches)
+
+	summary := TournamentSummary{
+		GroupCount: len(groups),
+	}
+	for _, group := range groups {
+		summary.TeamCount += len(group.Teams)
+		summary.MatchCount += len(group.Matches)
+		for _, match := range group.Matches {
+			if match.Status == "finished" {
+				summary.FinishedMatches++
+			} else {
+				summary.ScheduledMatches++
+			}
+		}
+	}
+	for _, round := range knockoutRounds {
+		summary.KnockoutMatches += len(round.Matches)
+		summary.MatchCount += len(round.Matches)
+		for _, match := range round.Matches {
+			if match.Status == "finished" {
+				summary.FinishedMatches++
+			} else {
+				summary.ScheduledMatches++
+			}
+		}
+	}
+
+	season := h.cfg.Season
+	if standingsPayload.Filters.Season.String() != "" {
+		if parsedSeason, err := strconv.Atoi(standingsPayload.Filters.Season.String()); err == nil {
+			season = parsedSeason
+		}
+	}
+
+	return &TournamentResponse{
+		Competition:  firstNonEmpty(standingsPayload.Competition.Name, competitionName),
+		Season:       season,
+		FetchedAt:    time.Now().Format(time.RFC3339),
+		CacheSeconds: int(cacheTTL.Seconds()),
+		Warning:      strings.Join(warnings, "; "),
+		Source: TournamentSource{
+			Name: footballDataName + " + " + fifaRankingName,
+			URL:  fifaRankingDocs,
+		},
+		Summary:  summary,
+		Groups:   groups,
+		Knockout: knockoutRounds,
+	}, nil
 }
 
 func (h *Handler) fetchTournamentFromAPIFootball(ctx context.Context) (*TournamentResponse, error) {
@@ -522,6 +931,152 @@ func (h *Handler) fetchTournamentFromMediaWiki(ctx context.Context) (*Tournament
 	}, nil
 }
 
+func (h *Handler) footballDataGet(ctx context.Context, path string, params url.Values, target interface{}) error {
+	var lastErr error
+	for attempt := 1; attempt <= apiRetryAttempts; attempt++ {
+		err := h.footballDataGetOnce(ctx, path, params, target)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if attempt == apiRetryAttempts || !isTransientSourceError(err) {
+			break
+		}
+
+		delay := time.Duration(attempt) * apiRetryBackoff
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+
+	return fmt.Errorf("football-data.org %s request failed: %w", strings.TrimPrefix(path, "/"), lastErr)
+}
+
+func (h *Handler) footballDataGetOnce(ctx context.Context, path string, params url.Values, target interface{}) error {
+	token := strings.TrimSpace(h.cfg.Token)
+	if token == "" {
+		return errors.New("FOOTBALL_DATA_TOKEN is not configured")
+	}
+
+	endpoint, err := url.Parse(strings.TrimRight(h.cfg.BaseURL, "/") + path)
+	if err != nil {
+		return err
+	}
+	endpoint.RawQuery = params.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "finance-app-worldcup/1.0")
+	req.Header.Set("X-Auth-Token", token)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return sourceHTTPError{status: resp.StatusCode, detail: readHTTPErrorDetail(resp)}
+	}
+	return json.NewDecoder(resp.Body).Decode(target)
+}
+
+func newFootballDataHTTPClient(cfg Config) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if cfg.DisableEnvProxy {
+		transport.Proxy = nil
+	}
+	transport.DisableKeepAlives = true
+
+	return &http.Client{
+		Timeout:   requestTimeout,
+		Transport: transport,
+	}
+}
+
+func (h *Handler) fetchFIFARankings(ctx context.Context) (*fifaRankingIndex, error) {
+	var payload fifaRankingResponse
+	locale := firstNonEmpty(h.cfg.RankingLocale, defaultRankingLocale)
+	if scheduleID := strings.TrimSpace(h.cfg.RankingScheduleID); scheduleID != "" {
+		if err := h.fifaRankingGet(ctx, "/fifarankings/rankings/rankingsbyschedule", url.Values{
+			"rankingScheduleId": []string{scheduleID},
+			"language":          []string{locale},
+		}, &payload); err != nil {
+			return nil, err
+		}
+	} else if err := h.fifaRankingGet(ctx, "/fifarankings/rankings/live", url.Values{
+		"gender":    []string{"1"},
+		"sportType": []string{"0"},
+		"language":  []string{locale},
+	}, &payload); err != nil {
+		return nil, err
+	}
+	if len(payload.Results) == 0 {
+		return nil, errors.New("FIFA rankings returned no teams")
+	}
+	return newFIFARankingIndex(payload.Results), nil
+}
+
+func (h *Handler) fifaRankingGet(ctx context.Context, path string, params url.Values, target interface{}) error {
+	var lastErr error
+	for attempt := 1; attempt <= apiRetryAttempts; attempt++ {
+		err := h.fifaRankingGetOnce(ctx, path, params, target)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if attempt == apiRetryAttempts || !isTransientSourceError(err) {
+			break
+		}
+
+		delay := time.Duration(attempt) * apiRetryBackoff
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+
+	return fmt.Errorf("FIFA rankings %s request failed: %w", strings.TrimPrefix(path, "/"), lastErr)
+}
+
+func (h *Handler) fifaRankingGetOnce(ctx context.Context, path string, params url.Values, target interface{}) error {
+	endpoint, err := url.Parse(strings.TrimRight(firstNonEmpty(h.cfg.RankingBaseURL, defaultRankingBaseURL), "/") + path)
+	if err != nil {
+		return err
+	}
+	endpoint.RawQuery = params.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "finance-app-worldcup/1.0")
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return sourceHTTPError{status: resp.StatusCode, detail: readHTTPErrorDetail(resp)}
+	}
+	return json.NewDecoder(resp.Body).Decode(target)
+}
+
 func (h *Handler) apiFootballGet(ctx context.Context, path string, params url.Values, target interface{}) error {
 	var lastErr error
 	for attempt := 1; attempt <= apiRetryAttempts; attempt++ {
@@ -533,7 +1088,7 @@ func (h *Handler) apiFootballGet(ctx context.Context, path string, params url.Va
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if attempt == apiRetryAttempts || !isTransientAPIFootballError(err) {
+		if attempt == apiRetryAttempts || !isTransientSourceError(err) {
 			break
 		}
 
@@ -595,7 +1150,7 @@ func newAPIFootballHTTPClient(cfg Config) *http.Client {
 	}
 }
 
-func isTransientAPIFootballError(err error) bool {
+func isTransientSourceError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
@@ -629,6 +1184,7 @@ func readHTTPErrorDetail(resp *http.Response) string {
 	var payload struct {
 		Errors  json.RawMessage `json:"errors"`
 		Message string          `json:"message"`
+		Error   string          `json:"error"`
 	}
 	if err := json.Unmarshal(body, &payload); err == nil {
 		if message := apiFootballErrorMessage(payload.Errors); message != "" {
@@ -636,6 +1192,9 @@ func readHTTPErrorDetail(resp *http.Response) string {
 		}
 		if strings.TrimSpace(payload.Message) != "" {
 			return strings.TrimSpace(payload.Message)
+		}
+		if strings.TrimSpace(payload.Error) != "" {
+			return strings.TrimSpace(payload.Error)
 		}
 	}
 
@@ -690,6 +1249,26 @@ func ensureAPIGroup(groups map[string]*Group, key string, label string) *Group {
 	return group
 }
 
+func ensureFootballDataGroup(groups map[string]*Group, key string, label string) *Group {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		key = "Unknown"
+	}
+	if group, ok := groups[key]; ok {
+		return group
+	}
+	if strings.TrimSpace(label) == "" {
+		label = "Group " + key
+	}
+	group := &Group{
+		Key:       key,
+		Label:     apiGroupLabel(key, label),
+		SourceURL: footballDataDocs,
+	}
+	groups[key] = group
+	return group
+}
+
 func apiGroupLabel(key string, fallback string) string {
 	if len([]rune(key)) == 1 && key >= "A" && key <= "Z" {
 		return key + "组"
@@ -716,11 +1295,381 @@ func groupKeyForFixture(round string, homeID int, awayID int, refs map[int]teamR
 }
 
 func groupKeyFromText(value string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(value))
+	if strings.HasPrefix(normalized, "GROUP_") {
+		return strings.TrimPrefix(normalized, "GROUP_")
+	}
+	if strings.HasPrefix(normalized, "GROUP ") {
+		return strings.TrimSpace(strings.TrimPrefix(normalized, "GROUP "))
+	}
 	match := groupTextPattern.FindStringSubmatch(value)
 	if len(match) != 2 {
 		return ""
 	}
 	return match[1]
+}
+
+func ensureFootballDataTeamInGroup(group *Group, refs map[int]teamRef, standings map[int]Team, dto footballDataTeamDTO, groupKey string) teamRef {
+	if ref, ok := refs[dto.ID]; ok && ref.groupKey == groupKey {
+		return ref
+	}
+
+	code := footballDataTeamCode(dto)
+	for index, team := range group.Teams {
+		if team.Code == code || team.Name == footballDataTeamName(dto) {
+			ref := teamRef{groupKey: groupKey, teamIndex: index}
+			refs[dto.ID] = ref
+			return ref
+		}
+	}
+
+	team, ok := standings[dto.ID]
+	if !ok {
+		team = Team{
+			Code:    code,
+			Name:    footballDataTeamName(dto),
+			FlagURL: dto.Crest,
+		}
+	} else {
+		team.Code = firstNonEmpty(team.Code, code)
+		team.Name = firstNonEmpty(team.Name, footballDataTeamName(dto))
+		team.FlagURL = firstNonEmpty(team.FlagURL, dto.Crest)
+	}
+
+	group.Teams = append(group.Teams, team)
+	ref := teamRef{groupKey: groupKey, teamIndex: len(group.Teams) - 1}
+	refs[dto.ID] = ref
+	return ref
+}
+
+func sortFootballDataTeams(teams []Team) {
+	hasRank := false
+	for _, team := range teams {
+		if team.GroupRank > 0 {
+			hasRank = true
+			break
+		}
+	}
+	sort.SliceStable(teams, func(i, j int) bool {
+		if hasRank {
+			if teams[i].GroupRank == 0 {
+				return false
+			}
+			if teams[j].GroupRank == 0 {
+				return true
+			}
+			if teams[i].GroupRank != teams[j].GroupRank {
+				return teams[i].GroupRank < teams[j].GroupRank
+			}
+		}
+		if teams[i].Points != teams[j].Points {
+			return teams[i].Points > teams[j].Points
+		}
+		if teams[i].GoalDifference != teams[j].GoalDifference {
+			return teams[i].GoalDifference > teams[j].GoalDifference
+		}
+		if teams[i].GoalsFor != teams[j].GoalsFor {
+			return teams[i].GoalsFor > teams[j].GoalsFor
+		}
+		return teams[i].Name < teams[j].Name
+	})
+	if !hasRank {
+		for index := range teams {
+			teams[index].GroupRank = index + 1
+		}
+	}
+}
+
+func footballDataTeamName(team footballDataTeamDTO) string {
+	return firstNonEmpty(team.Name, team.ShortName, team.TLA)
+}
+
+func footballDataTeamCode(team footballDataTeamDTO) string {
+	return firstNonEmpty(team.TLA, strconv.Itoa(team.ID))
+}
+
+func footballDataMatchToMatch(groupKey string, fixture footballDataMatchDTO) Match {
+	date, matchTime, utcDate := footballDataDateTime(fixture.UTCDate)
+	status := "scheduled"
+	score := ""
+	if isFootballDataFinished(fixture.Status) && fixture.Score.FullTime.Home != nil && fixture.Score.FullTime.Away != nil {
+		status = "finished"
+		score = fmt.Sprintf("%d-%d", *fixture.Score.FullTime.Home, *fixture.Score.FullTime.Away)
+	}
+	return Match{
+		ID:            strconv.Itoa(fixture.ID),
+		Group:         groupKey,
+		Stage:         strings.ToUpper(strings.TrimSpace(fixture.Stage)),
+		UTCDate:       utcDate,
+		Date:          date,
+		Time:          matchTime,
+		HomeTeam:      footballDataTeamName(fixture.HomeTeam),
+		HomeWikiTitle: strconv.Itoa(fixture.HomeTeam.ID),
+		AwayTeam:      footballDataTeamName(fixture.AwayTeam),
+		AwayWikiTitle: strconv.Itoa(fixture.AwayTeam.ID),
+		Score:         score,
+		HomeScore:     fixture.Score.FullTime.Home,
+		AwayScore:     fixture.Score.FullTime.Away,
+		Status:        status,
+		Venue:         fixture.Venue.String(),
+	}
+}
+
+func footballDataDateTime(value string) (string, string, string) {
+	return utcDateTimeParts(value)
+}
+
+func utcDateTimeParts(value string) (string, string, string) {
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		if len(value) >= 16 {
+			return value[:10], value[11:16], value
+		}
+		return value, "", value
+	}
+	utc := parsed.UTC()
+	return utc.Format("2006-01-02"), utc.Format("15:04"), utc.Format(time.RFC3339)
+}
+
+func isFootballDataFinished(status string) bool {
+	return strings.EqualFold(strings.TrimSpace(status), "FINISHED")
+}
+
+func isFootballDataGroupStage(stage string) bool {
+	return strings.EqualFold(strings.TrimSpace(stage), "GROUP_STAGE")
+}
+
+func isFootballDataKnockoutStage(stage string) bool {
+	key := knockoutStageKey(stage)
+	return key != "" && key != "GROUP_STAGE"
+}
+
+func buildKnockoutRounds(matches []Match) []KnockoutRound {
+	if len(matches) == 0 {
+		return nil
+	}
+
+	roundMap := make(map[string][]Match)
+	for _, match := range matches {
+		key := knockoutStageKey(firstNonEmpty(match.Stage, match.Group))
+		if key == "" {
+			key = "KNOCKOUT"
+		}
+		match.Group = key
+		match.Stage = key
+		roundMap[key] = append(roundMap[key], match)
+	}
+
+	keys := make([]string, 0, len(roundMap))
+	for key := range roundMap {
+		keys = append(keys, key)
+	}
+	sort.SliceStable(keys, func(i, j int) bool {
+		left := knockoutStageOrder(keys[i])
+		right := knockoutStageOrder(keys[j])
+		if left == right {
+			return keys[i] < keys[j]
+		}
+		return left < right
+	})
+
+	rounds := make([]KnockoutRound, 0, len(keys))
+	for _, key := range keys {
+		roundMatches := roundMap[key]
+		sort.SliceStable(roundMatches, func(i, j int) bool {
+			if roundMatches[i].Date == roundMatches[j].Date {
+				return roundMatches[i].Time < roundMatches[j].Time
+			}
+			return roundMatches[i].Date < roundMatches[j].Date
+		})
+		rounds = append(rounds, KnockoutRound{
+			Key:     key,
+			Label:   knockoutStageLabel(key),
+			Matches: roundMatches,
+		})
+	}
+	return rounds
+}
+
+func knockoutStageKey(stage string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(stage))
+	normalized = strings.NewReplacer("-", "_", " ", "_").Replace(normalized)
+	switch normalized {
+	case "", "GROUP_STAGE":
+		return normalized
+	case "LAST_32", "ROUND_OF_32", "ROUND_32", "R32":
+		return "LAST_32"
+	case "LAST_16", "ROUND_OF_16", "ROUND_16", "R16":
+		return "LAST_16"
+	case "QUARTER_FINALS", "QUARTER_FINAL", "QUARTERFINALS", "QUARTERFINAL":
+		return "QUARTER_FINALS"
+	case "SEMI_FINALS", "SEMI_FINAL", "SEMIFINALS", "SEMIFINAL":
+		return "SEMI_FINALS"
+	case "THIRD_PLACE", "THIRD_PLACE_PLAYOFF", "PLAY_OFF_FOR_THIRD_PLACE", "PLAYOFF_FOR_THIRD_PLACE":
+		return "THIRD_PLACE"
+	case "FINAL", "FINALS":
+		return "FINAL"
+	default:
+		return normalized
+	}
+}
+
+func knockoutStageOrder(stage string) int {
+	switch knockoutStageKey(stage) {
+	case "LAST_32":
+		return 10
+	case "LAST_16":
+		return 20
+	case "QUARTER_FINALS":
+		return 30
+	case "SEMI_FINALS":
+		return 40
+	case "THIRD_PLACE":
+		return 50
+	case "FINAL":
+		return 60
+	default:
+		return 100
+	}
+}
+
+func knockoutStageLabel(stage string) string {
+	switch knockoutStageKey(stage) {
+	case "LAST_32":
+		return "32强"
+	case "LAST_16":
+		return "16强"
+	case "QUARTER_FINALS":
+		return "1/4 决赛"
+	case "SEMI_FINALS":
+		return "半决赛"
+	case "THIRD_PLACE":
+		return "季军赛"
+	case "FINAL":
+		return "决赛"
+	default:
+		value := strings.ReplaceAll(strings.TrimSpace(stage), "_", " ")
+		if value == "" {
+			return "淘汰赛"
+		}
+		return strings.Title(strings.ToLower(value))
+	}
+}
+
+func newFIFARankingIndex(entries []fifaRankingEntry) *fifaRankingIndex {
+	index := &fifaRankingIndex{
+		byCode: make(map[string]fifaRankingEntry, len(entries)),
+		byName: make(map[string]fifaRankingEntry, len(entries)),
+	}
+	for _, entry := range entries {
+		if entry.Rank <= 0 {
+			continue
+		}
+		code := strings.ToUpper(strings.TrimSpace(entry.IDCountry))
+		if code != "" {
+			index.byCode[code] = entry
+		}
+		for _, name := range fifaRankingEntryNames(entry) {
+			if key := normalizeTeamLookupKey(name); key != "" {
+				index.byName[key] = entry
+			}
+		}
+	}
+	return index
+}
+
+func applyFIFARankings(teams []Team, rankings *fifaRankingIndex) {
+	if rankings == nil {
+		return
+	}
+	for index := range teams {
+		entry, ok := rankings.find(teams[index])
+		if !ok {
+			continue
+		}
+		teams[index].WorldRank = entry.Rank
+		teams[index].Confederation = firstNonEmpty(teams[index].Confederation, entry.ConfederationName)
+		teams[index].Code = firstNonEmpty(teams[index].Code, entry.IDCountry)
+	}
+}
+
+func (rankings *fifaRankingIndex) find(team Team) (fifaRankingEntry, bool) {
+	if rankings == nil {
+		return fifaRankingEntry{}, false
+	}
+	if code := strings.ToUpper(strings.TrimSpace(team.Code)); code != "" {
+		if entry, ok := rankings.byCode[code]; ok {
+			return entry, true
+		}
+	}
+	for _, name := range teamLookupNames(team.Name) {
+		if entry, ok := rankings.byName[normalizeTeamLookupKey(name)]; ok {
+			return entry, true
+		}
+	}
+	return fifaRankingEntry{}, false
+}
+
+func fifaRankingEntryNames(entry fifaRankingEntry) []string {
+	names := make([]string, 0, len(entry.TeamName)+1)
+	for _, name := range entry.TeamName {
+		if strings.TrimSpace(name.Description) != "" {
+			names = append(names, name.Description)
+		}
+	}
+	if entry.IDCountry != "" {
+		names = append(names, entry.IDCountry)
+	}
+	return names
+}
+
+func teamLookupNames(name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	names := []string{name}
+	switch normalizeTeamLookupKey(name) {
+	case "united states", "usa", "us":
+		names = append(names, "USA")
+	case "south korea", "korea republic":
+		names = append(names, "Korea Republic")
+	case "iran", "ir iran":
+		names = append(names, "IR Iran")
+	case "ivory coast", "cote divoire", "côte divoire":
+		names = append(names, "Côte d'Ivoire")
+	case "turkey", "turkiye", "türkiye":
+		names = append(names, "Türkiye")
+	}
+	return names
+}
+
+func normalizeTeamLookupKey(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.NewReplacer(
+		"&", " and ",
+		"'", "",
+		".", " ",
+		"-", " ",
+		"’", "",
+		"côte", "cote",
+		"türkiye", "turkiye",
+	).Replace(value)
+
+	var builder strings.Builder
+	lastSpace := true
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			builder.WriteRune(r)
+			lastSpace = false
+			continue
+		}
+		if !lastSpace {
+			builder.WriteByte(' ')
+			lastSpace = true
+		}
+	}
+	return strings.TrimSpace(builder.String())
 }
 
 func apiFixtureToMatch(groupKey string, fixture struct {
@@ -759,7 +1708,7 @@ func apiFixtureToMatch(groupKey string, fixture struct {
 		Away *int `json:"away"`
 	} `json:"goals"`
 }) Match {
-	date, matchTime := apiFixtureDateTime(fixture.Fixture.Date)
+	date, matchTime, utcDate := apiFixtureDateTime(fixture.Fixture.Date)
 	status := "scheduled"
 	score := ""
 	if isAPIFootballFinished(fixture.Fixture.Status.Short) && fixture.Goals.Home != nil && fixture.Goals.Away != nil {
@@ -770,6 +1719,8 @@ func apiFixtureToMatch(groupKey string, fixture struct {
 	return Match{
 		ID:            strconv.Itoa(fixture.Fixture.ID),
 		Group:         groupKey,
+		Stage:         strings.ToUpper(strings.TrimSpace(fixture.League.Round)),
+		UTCDate:       utcDate,
 		Date:          date,
 		Time:          matchTime,
 		HomeTeam:      fixture.Teams.Home.Name,
@@ -784,15 +1735,8 @@ func apiFixtureToMatch(groupKey string, fixture struct {
 	}
 }
 
-func apiFixtureDateTime(value string) (string, string) {
-	parsed, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		if len(value) >= 16 {
-			return value[:10], value[11:16]
-		}
-		return value, ""
-	}
-	return parsed.Format("2006-01-02"), parsed.Format("15:04")
+func apiFixtureDateTime(value string) (string, string, string) {
+	return utcDateTimeParts(value)
 }
 
 func isAPIFootballFinished(status string) bool {
@@ -813,6 +1757,110 @@ func nonEmptyStrings(values ...string) []string {
 		}
 	}
 	return parts
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func stringFromMap(values map[string]interface{}, key string) string {
+	if values == nil {
+		return ""
+	}
+	value, ok := values[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case json.Number:
+		return typed.String()
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
+}
+
+func footballDataNeedsVenueFallback(matches []footballDataMatchDTO) bool {
+	for _, match := range matches {
+		if isFootballDataGroupStage(match.Stage) && match.Venue.String() == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Handler) fetchWikiMatchVenueIndex(ctx context.Context) (matchVenueIndex, error) {
+	tournament, err := h.fetchTournamentFromWikiText(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return newMatchVenueIndex(tournament.Groups), nil
+}
+
+func newMatchVenueIndex(groups []Group) matchVenueIndex {
+	index := make(matchVenueIndex)
+	for _, group := range groups {
+		for _, match := range group.Matches {
+			venue := strings.TrimSpace(match.Venue)
+			if venue == "" {
+				continue
+			}
+			for _, key := range matchVenueKeys(group.Key, match.HomeTeam, match.AwayTeam) {
+				index[key] = venue
+			}
+			for _, key := range matchVenueKeys(group.Key, match.AwayTeam, match.HomeTeam) {
+				index[key] = venue
+			}
+		}
+	}
+	return index
+}
+
+func (index matchVenueIndex) find(match Match) string {
+	if len(index) == 0 {
+		return ""
+	}
+	for _, key := range matchVenueKeys(match.Group, match.HomeTeam, match.AwayTeam) {
+		if venue := strings.TrimSpace(index[key]); venue != "" {
+			return venue
+		}
+	}
+	return ""
+}
+
+func matchVenueKeys(groupKey string, homeTeam string, awayTeam string) []string {
+	homeNames := teamLookupNames(homeTeam)
+	if len(homeNames) == 0 {
+		homeNames = []string{homeTeam}
+	}
+	awayNames := teamLookupNames(awayTeam)
+	if len(awayNames) == 0 {
+		awayNames = []string{awayTeam}
+	}
+
+	keys := make([]string, 0, len(homeNames)*len(awayNames))
+	group := strings.ToUpper(strings.TrimSpace(groupKey))
+	for _, home := range homeNames {
+		home = normalizeTeamLookupKey(home)
+		if home == "" {
+			continue
+		}
+		for _, away := range awayNames {
+			away = normalizeTeamLookupKey(away)
+			if away == "" {
+				continue
+			}
+			keys = append(keys, group+"|"+home+"|"+away)
+		}
+	}
+	return keys
 }
 
 func (h *Handler) fetchTournamentFromWikiText(ctx context.Context) (*TournamentResponse, error) {
@@ -2011,6 +3059,10 @@ func cloneTournament(tournament *TournamentResponse) *TournamentResponse {
 	}
 	clone := *tournament
 	clone.Groups = append([]Group(nil), tournament.Groups...)
+	clone.Knockout = append([]KnockoutRound(nil), tournament.Knockout...)
+	for roundIndex := range clone.Knockout {
+		clone.Knockout[roundIndex].Matches = append([]Match(nil), tournament.Knockout[roundIndex].Matches...)
+	}
 	for groupIndex := range clone.Groups {
 		clone.Groups[groupIndex].Teams = append([]Team(nil), tournament.Groups[groupIndex].Teams...)
 		clone.Groups[groupIndex].Standings = append([]Team(nil), tournament.Groups[groupIndex].Standings...)

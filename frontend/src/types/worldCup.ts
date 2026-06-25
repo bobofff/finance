@@ -1,6 +1,8 @@
 export interface WorldCupMatch {
   id: string;
   group: string;
+  stage?: string;
+  utc_date?: string;
   date: string;
   time: string;
   home_team: string;
@@ -52,6 +54,12 @@ export interface WorldCupGroup {
   matches: WorldCupMatch[];
 }
 
+export interface WorldCupKnockoutRound {
+  key: string;
+  label: string;
+  matches: WorldCupMatch[];
+}
+
 export interface WorldCupResponse {
   competition: string;
   season: number;
@@ -67,8 +75,10 @@ export interface WorldCupResponse {
     group_count: number;
     team_count: number;
     match_count: number;
+    knockout_matches: number;
     finished_matches: number;
     scheduled_matches: number;
   };
   groups: WorldCupGroup[];
+  knockout_rounds: WorldCupKnockoutRound[];
 }

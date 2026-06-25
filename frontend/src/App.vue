@@ -1,6 +1,6 @@
 <template>
   <el-container class="app-shell">
-    <div v-if="!isAuthed" class="theme-floating">
+    <div v-if="!showTopbar" class="theme-floating">
       <el-tooltip :content="isDarkTheme ? '切换到浅色模式' : '切换到暗黑模式'" placement="bottom">
         <el-button circle :icon="isDarkTheme ? Sunny : Moon" class="theme-floating-button" @click="toggleTheme" />
       </el-tooltip>
@@ -40,16 +40,18 @@
     </el-aside>
 
     <el-container class="content-shell">
-      <el-header v-if="isAuthed" class="topbar">
+      <el-header v-if="showTopbar" class="topbar">
         <div class="topbar-left">
-          <el-button v-if="isMobile" text size="small" @click="drawerVisible = true">菜单</el-button>
-          <el-button
-            v-if="!isMobile"
-            text
-            size="small"
-            :icon="isSidebarCollapsed ? Expand : Fold"
-            @click="toggleSidebar"
-          />
+          <template v-if="isAuthed">
+            <el-button v-if="isMobile" text size="small" @click="drawerVisible = true">菜单</el-button>
+            <el-button
+              v-if="!isMobile"
+              text
+              size="small"
+              :icon="isSidebarCollapsed ? Expand : Fold"
+              @click="toggleSidebar"
+            />
+          </template>
           <div class="topbar-title">{{ activeMenuLabel }}</div>
           <div class="topbar-subtitle">{{ activeMenuSubtitle }}</div>
         </div>
@@ -59,8 +61,11 @@
               {{ isDarkTheme ? '浅色' : '暗黑' }}
             </el-button>
           </el-tooltip>
-          <el-button text size="small" :icon="Bell">通知</el-button>
-          <el-button text size="small" :icon="User" @click="handleLogout">退出</el-button>
+          <template v-if="isAuthed">
+            <el-button text size="small" :icon="Bell">通知</el-button>
+            <el-button text size="small" :icon="User" @click="handleLogout">退出</el-button>
+          </template>
+          <el-button v-else text size="small" :icon="User" @click="showLogin">登录</el-button>
         </div>
       </el-header>
       <el-main class="main-content">
@@ -75,13 +80,26 @@
               activeMenu === 'world-cup'
           }"
         >
-          <component :is="activeView" :key="activeMenu" @success="handleLoginSuccess" />
+          <component
+            :is="activeView"
+            :key="activeMenu"
+            @success="handleLoginSuccess"
+            @open-world-cup="openWorldCup"
+          />
         </div>
       </el-main>
     </el-container>
   </el-container>
 
-  <el-drawer v-model="drawerVisible" title="菜单" size="240px" direction="ltr" :with-header="true" class="sidebar-drawer">
+  <el-drawer
+    v-if="isAuthed"
+    v-model="drawerVisible"
+    title="菜单"
+    size="240px"
+    direction="ltr"
+    :with-header="true"
+    class="sidebar-drawer"
+  >
     <el-menu :default-active="activeMenu" class="drawer-menu" :router="false" @select="onSelectMobile">
       <el-menu-item v-for="item in menuItems" :key="item.key" :index="item.key" :disabled="item.disabled">
         <component :is="item.icon" class="menu-icon" />
@@ -144,6 +162,7 @@ const menuItems: MenuItem[] = [
 
 const MENU_STORAGE_KEY = 'finance.activeMenu';
 const THEME_STORAGE_KEY = 'finance.theme';
+const PUBLIC_MENU_KEYS = new Set(['world-cup']);
 const activeMenu = ref(localStorage.getItem(MENU_STORAGE_KEY) || 'balance-sheet');
 const isAuthed = ref(!!authStorage.getToken());
 const isMobile = ref(window.innerWidth <= 900);
@@ -152,13 +171,15 @@ const SIDEBAR_COLLAPSE_KEY = 'finance.sidebarCollapsed';
 const isSidebarCollapsed = ref(localStorage.getItem(SIDEBAR_COLLAPSE_KEY) === '1');
 const themeMode = ref<'light' | 'dark'>(resolveInitialTheme());
 const isDarkTheme = computed(() => themeMode.value === 'dark');
+const isPublicMenu = computed(() => PUBLIC_MENU_KEYS.has(activeMenu.value));
+const showTopbar = computed(() => isAuthed.value || isPublicMenu.value);
 const activeMenuItem = computed(() => menuItems.find((item) => item.key === activeMenu.value));
 const activeMenuLabel = computed(() => activeMenuItem.value?.label || '财务总览');
 const activeMenuSubtitle = computed(() =>
   activeMenu.value === 'world-cup' ? 'Groups · Standings · Fixtures' : 'Accounts · Transactions · Insights'
 );
 const activeView = computed(() => {
-  if (!isAuthed.value) {
+  if (!isAuthed.value && !isPublicMenu.value) {
     return LoginPage;
   }
   switch (activeMenu.value) {
@@ -197,6 +218,16 @@ const onSelect = (key: string) => {
 const onSelectMobile = (key: string) => {
   onSelect(key);
   drawerVisible.value = false;
+};
+
+const openWorldCup = () => {
+  activeMenu.value = 'world-cup';
+  localStorage.setItem(MENU_STORAGE_KEY, activeMenu.value);
+};
+
+const showLogin = () => {
+  activeMenu.value = 'balance-sheet';
+  localStorage.setItem(MENU_STORAGE_KEY, activeMenu.value);
 };
 
 const handleLoginSuccess = () => {

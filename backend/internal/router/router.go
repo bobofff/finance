@@ -51,11 +51,14 @@ func New(cfg config.Config, db *gorm.DB, logger *slog.Logger) *gin.Engine {
 		transaction.RegisterRoutes(api.Group("/transactions"), db)
 		report.RegisterRoutes(api.Group("/reports"), db)
 		worldcup.RegisterRoutes(api.Group("/world-cup"), worldcup.Config{
-			APIKey:          cfg.Football.APIKey,
-			BaseURL:         cfg.Football.BaseURL,
-			LeagueID:        cfg.Football.LeagueID,
-			Season:          cfg.Football.Season,
-			DisableEnvProxy: !cfg.Football.UseEnvProxy,
+			Token:             cfg.Football.Token,
+			BaseURL:           cfg.Football.BaseURL,
+			CompetitionCode:   cfg.Football.CompetitionCode,
+			Season:            cfg.Football.Season,
+			RankingBaseURL:    cfg.Football.RankingBaseURL,
+			RankingScheduleID: cfg.Football.RankingScheduleID,
+			RankingLocale:     cfg.Football.RankingLocale,
+			DisableEnvProxy:   !cfg.Football.UseEnvProxy,
 		})
 	}
 

@@ -41,11 +41,14 @@ type AIConfig struct {
 }
 
 type FootballConfig struct {
-	APIKey      string
-	BaseURL     string
-	LeagueID    int
-	Season      int
-	UseEnvProxy bool
+	Token             string
+	BaseURL           string
+	CompetitionCode   string
+	Season            int
+	RankingBaseURL    string
+	RankingScheduleID string
+	RankingLocale     string
+	UseEnvProxy       bool
 }
 
 type LogConfig struct {
@@ -77,11 +80,14 @@ func Load() Config {
 			UseEnvProxy:           getenvBool("AI_USE_ENV_PROXY", true),
 		},
 		Football: FootballConfig{
-			APIKey:      getenv("FOOTBALL_API_KEY", ""),
-			BaseURL:     strings.TrimRight(getenv("FOOTBALL_API_BASE_URL", "https://v3.football.api-sports.io"), "/"),
-			LeagueID:    getenvInt("FOOTBALL_WORLD_CUP_LEAGUE_ID", 1),
-			Season:      getenvInt("FOOTBALL_WORLD_CUP_SEASON", 2026),
-			UseEnvProxy: getenvBool("FOOTBALL_USE_ENV_PROXY", true),
+			Token:             getenv("FOOTBALL_DATA_TOKEN", getenv("FOOTBALL_DATA_API_TOKEN", "")),
+			BaseURL:           strings.TrimRight(getenv("FOOTBALL_DATA_BASE_URL", "https://api.football-data.org/v4"), "/"),
+			CompetitionCode:   getenv("FOOTBALL_DATA_COMPETITION", "WC"),
+			Season:            getenvInt("FOOTBALL_WORLD_CUP_SEASON", 2026),
+			RankingBaseURL:    strings.TrimRight(getenv("FIFA_RANKING_BASE_URL", "https://api.fifa.com/api/v3"), "/"),
+			RankingScheduleID: getenv("FIFA_RANKING_SCHEDULE_ID", ""),
+			RankingLocale:     getenv("FIFA_RANKING_LOCALE", "en-GB"),
+			UseEnvProxy:       getenvBool("FOOTBALL_USE_ENV_PROXY", true),
 		},
 		Log: LogConfig{
 			Dir: getenv("LOG_DIR", filepath.Join(moduleRoot(), "logs")),

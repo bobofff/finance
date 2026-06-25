@@ -112,6 +112,8 @@ func Middleware() gin.HandlerFunc {
 	skipPaths := map[string]struct{}{
 		"/api/health":     {},
 		"/api/auth/login": {},
+		"/api/world-cup":  {},
+		"/api/world-cup/": {},
 	}
 
 	secret := strings.TrimSpace(os.Getenv("AUTH_JWT_SECRET"))

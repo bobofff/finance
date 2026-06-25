@@ -17,6 +17,7 @@
       </el-form>
 
       <el-button type="primary" :loading="loading" class="login-button" @click="submit">登录</el-button>
+      <el-button text class="worldcup-entry" @click="emit('open-world-cup')">免登录查看世界杯</el-button>
       <div v-if="error" class="login-error">{{ error }}</div>
     </div>
   </div>
@@ -28,6 +29,7 @@ import { login } from '@/api/auth';
 
 const emit = defineEmits<{
   (e: 'success'): void;
+  (e: 'open-world-cup'): void;
 }>();
 
 const username = ref('');
@@ -85,6 +87,15 @@ const submit = async () => {
 
 .login-button {
   width: 100%;
+}
+
+.worldcup-entry {
+  width: 100%;
+  margin: 10px 0 0;
+}
+
+.login-button + .worldcup-entry {
+  margin-left: 0;
 }
 
 .login-error {
